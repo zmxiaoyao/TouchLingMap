@@ -115,7 +115,7 @@ class MirrorService : Service() {
         // 找背屏：非默认显示屏、且不是自己创建的虚拟屏
         val dm = getSystemService(DisplayManager::class.java)
         val back = dm.displays.firstOrNull {
-            it.displayId != Display.DEFAULT_DISPLAY && it.ownerPackageName != packageName
+            it.displayId != Display.DEFAULT_DISPLAY && it.name != "touchling_mirror"
         }
         if (back == null) {
             toast("未检测到背屏（背屏是否已唤醒？）")
