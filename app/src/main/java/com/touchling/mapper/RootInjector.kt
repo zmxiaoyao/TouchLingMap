@@ -54,7 +54,7 @@ class RootInjector : Injector {
         val w = ensure() ?: return
         try {
             w.write(cmd)
-            w.write('\n')
+            w.write("\n")
             w.flush()
         } catch (t: Throwable) {
             // su 被拒绝或进程死亡 → 清理，等待下次重试
