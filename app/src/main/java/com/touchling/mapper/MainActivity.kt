@@ -165,10 +165,24 @@ class MainActivity : Activity() {
     }
 
     private fun shizukuState(): String = try {
-        when {
-            !Shizuku.pingBinder() -> "未运行/未安装"
-            Shizuku.checkSelfPermission() -> "已授权"
-            else -> "未授权"
+        // 反射读取，兼容不同版本的返回类型（Boolean / Int）
+        val ping = Shizuku::class.java.getMethod("pingBinder").invoke(null)
+        val alive = when (ping) {
+            is Boolean -> ping
+            is Number -> ping.toInt() != 0
+            else -> false
+        }
+        if (!alive) {
+            "未运行/未安装"
+        } else {
+            val g = Shizuku::class.java.getMethod("checkSelfPermission").invoke(null)
+            // PERMISSION_GRANTED = 0（若返回 Boolean 则 true 为已授权）
+            val granted = when (g) {
+                is Boolean -> g
+                is Number -> g.toInt() == 0
+                else -> false
+            }
+            if (granted) "已授权" else "未授权"
         }
     } catch (t: Throwable) {
         "不可用"
