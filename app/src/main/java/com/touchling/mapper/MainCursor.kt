@@ -22,7 +22,7 @@ import android.view.WindowManager
 class MainCursor(
     private val ctx: Context,
     private val style: Int,
-    sizeIdx: Int,
+    sizeDp: Int,
     private val colorIdx: Int
 ) {
 
@@ -47,7 +47,7 @@ class MainCursor(
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val density = ctx.resources.displayMetrics.density
-    private val size = (density * sizeDp(sizeIdx)).toInt().coerceAtLeast(12)
+    private val size = (density * sizeDp.coerceIn(8, 96)).toInt().coerceAtLeast(12)
 
     private var view: View? = null
 
@@ -167,5 +167,10 @@ class MainCursor(
             view = null
             Diag.log("主屏光标已隐藏")
         }
+    }
+
+    /** v2.0.0：光标回中 */
+    fun center(x: Float, y: Float) {
+        move(x, y)
     }
 }
