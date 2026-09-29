@@ -71,7 +71,8 @@ class Cfg(
                 sp.getString(k, d) ?: d
             } catch (_: Throwable) { corrupted = true; d }
 
-            val mode = s("mode", "direct")
+            // v2.4.1：手势映射模式已下线，历史配置自动迁移回灵触映射
+            val mode = s("mode", "direct").let { if (it == "gesture") "direct" else it }
             // 平滑：smoothing（秒，默认 0.045）与旧 smoothMs（ms）兼容
             val smoothSec = f("smoothing", -1f)
             val smoothMsV =
