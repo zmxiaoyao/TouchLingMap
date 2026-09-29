@@ -109,6 +109,21 @@ val frame = BackFrame(this)
             }
             val wv = HtmlThemeView(this, htmlMode, aiFile)
             frame.addView(wv, FrameLayout.LayoutParams(-1, -1))
+            // 右上角退出按钮（v1.3.0）
+            frame.addView(Button(this).apply {
+                text = "退出"
+                textSize = 12f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = (16 * resources.displayMetrics.density).toFloat()
+                    setColor(0x88000000.toInt())
+                }
+                setOnClickListener { MirrorService.stop(this@RearActivity) }
+            }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                topMargin = (12 * resources.displayMetrics.density).toInt()
+                rightMargin = (12 * resources.displayMetrics.density).toInt()
+            })
             setContentView(frame)
             applyWindowMode()
             Diag.log("HTML主题模式=$htmlMode")
@@ -441,6 +456,8 @@ val frame = BackFrame(this)
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         Diag.log("onConfigChanged display=${display?.displayId}")
+        // v1.3.0：更新"是否在背屏"标志，供服务端看门狗自愈
+        arrived = (display?.displayId ?: 0) != 0
         applyWindowMode()
     }
 
