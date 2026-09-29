@@ -70,10 +70,10 @@ class MirrorService : Service() {
             "start" -> {
                 teardown()
                 tornDown = false
-                startAsForeground()
                 displayOnly = intent.getBooleanExtra("displayOnly", false)
                 val noProj = intent.getBooleanExtra("noProjection", false)
                 Diag.log("displayOnly=$displayOnly noProjection=$noProj")
+                startAsForeground(noProj)
                 val code = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
                 val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
                     intent.getParcelableExtra("resultData", Intent::class.java)
@@ -96,7 +96,7 @@ class MirrorService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startAsForeground() {
+    private fun startAsForeground(specialUse: Boolean) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "背屏映射", NotificationManager.IMPORTANCE_LOW)
@@ -106,10 +106,21 @@ class MirrorService : Service() {
             .setContentTitle("触灵映射运行中")
             .setOngoing(true)
             .build()
+        // v1.2.0：只上屏模式没有投屏会话，必须用 specialUse 类型，否则 Android 14 直接抛异常
+        Diag.log("startForeground specialUse=$specialUse")
         try {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            if (specialUse) {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            }
         } catch (t: Throwable) {
-            startForeground(NOTIF_ID, n)
+            Diag.log("带类型 startForeground 失败: $t")
+            try {
+                startForeground(NOTIF_ID, n)
+            } catch (t2: Throwable) {
+                Diag.log("startForeground 失败: $t2")
+            }
         }
     }
 
