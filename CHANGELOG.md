@@ -2,6 +2,18 @@
 
 本项目版本记录。最新版本请见 [Releases](https://github.com/zmxiaoyao/TouchLingMap/releases)。
 
+## v2.4.2
+### 🐛 修复：背屏自动激活（彻底，逐行逆向参考实现后照抄）
+此前用 MIUI 私有电源事务点亮（慢、不保持、要 2~3 次），现在与参考实现完全一致：
+- `cmd power set-wakelock acquire -d <背屏id> SCREEN_BRIGHT_WAKE_LOCK` —— **按屏常亮锁**（实测输出 `held=true`）
+- `cmd power wakeup --display-id <背屏id>` —— **按屏唤醒**（一条命令即刻激活）
+- 启动映射即自动激活背屏并**保持常亮**（digitizer 持续工作，无需手动点亮）
+- 停止映射自动释放：`cmd display power-reset` + `set-wakelock release`（屏幕恢复原电源策略）
+- 兜底链完整：事务点亮（最多6次至 ON）+ 透明常亮窗口双保险；日志带 `held=true ✓` 验证行
+
+### 🐛 独占背屏触摸
+- v2.4.1 已修正部署路径（`libgrab.so` → nativeLibraryDir，0755，shell 可执行——与参考实现同款位置）；本版保留并强化日志验证（`G_READY`/`G_ERR` 明确输出）
+
 ## v2.4.1
 ### 🐛 修复
 - **独占背屏触摸"没用"（根因定位）**：v2.4.0 把 grab 工具部署到 app 私有 `filesDir`（权限 0700，shell 进不去）→ 进程秒退无输出（日志：`独占失败: 无响应`）
