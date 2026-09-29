@@ -24,6 +24,12 @@ class MainActivity : Activity() {
     private lateinit var rgChannel: RadioGroup
     private lateinit var sbSens: SeekBar
     private lateinit var sbMask: SeekBar
+    // v2.3.0 手势参数滑条
+    private lateinit var sbGThresh: SeekBar
+    private lateinit var sbGLen: SeekBar
+    private lateinit var sbGMs: SeekBar
+    private lateinit var sbGTapX: SeekBar
+    private lateinit var sbGTapY: SeekBar
     private lateinit var swGyro: android.widget.Switch
     private lateinit var swScroll2: android.widget.Switch
 
@@ -507,6 +513,74 @@ class MainActivity : Activity() {
         })
         page5.addView(handCard)
 
+        // 🖐 手势映射参数（v2.3.0：算法与默认值 1:1 逆向自「妙妙背屏」）
+        page5.addView(pageTitle("手势"))
+        val gCard = card()
+        gCard.addView(sectionTitle("手势映射参数（妙妙同款）"))
+        val tvG1 = sectionTitle("识别阈值")
+        sbGThresh = SeekBar(this).apply {
+            max = 30
+            progress = ((sp.getFloat("gThreshold", 0.12f) - 0.05f) * 100).toInt().coerceIn(0, 30)
+        }
+        gCard.addView(tvG1)
+        gCard.addView(sbGThresh)
+        bindLabel(tvG1, sbGThresh) {
+            "识别阈值 ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
+        }
+
+        val tvG2 = sectionTitle("滑动距离").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGLen = SeekBar(this).apply {
+            max = 60
+            progress = ((sp.getFloat("gSwipeLen", 0.46f) - 0.15f) * 100).toInt().coerceIn(0, 60)
+        }
+        gCard.addView(tvG2)
+        gCard.addView(sbGLen)
+        bindLabel(tvG2, sbGLen) {
+            "滑动距离 ${String.format(java.util.Locale.US, "%.2f", 0.15f + it / 100f)}"
+        }
+
+        val tvG3 = sectionTitle("滑动时长").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGMs = SeekBar(this).apply {
+            max = 530
+            progress = (sp.getInt("gSwipeMs", 260) - 120).coerceIn(0, 530)
+        }
+        gCard.addView(tvG3)
+        gCard.addView(sbGMs)
+        bindLabel(tvG3, sbGMs) { "滑动时长 ${120 + it} ms" }
+
+        gCard.addView(switchRow("上下反转", "gInvert").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+
+        val tvG4 = sectionTitle("点击 X").apply { setPadding(0, dp(8f), 0, dp(6f)) }
+        sbGTapX = SeekBar(this).apply {
+            max = 96
+            progress = ((sp.getFloat("gTapX", 0.5f) - 0.02f) * 100).toInt().coerceIn(0, 96)
+        }
+        gCard.addView(tvG4)
+        gCard.addView(sbGTapX)
+        bindLabel(tvG4, sbGTapX) {
+            "点击 X ${String.format(java.util.Locale.US, "%.2f", 0.02f + it / 100f)}"
+        }
+
+        val tvG5 = sectionTitle("点击 Y").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGTapY = SeekBar(this).apply {
+            max = 96
+            progress = ((sp.getFloat("gTapY", 0.5f) - 0.02f) * 100).toInt().coerceIn(0, 96)
+        }
+        gCard.addView(tvG5)
+        gCard.addView(sbGTapY)
+        bindLabel(tvG5, sbGTapY) {
+            "点击 Y ${String.format(java.util.Locale.US, "%.2f", 0.02f + it / 100f)}"
+        }
+
+        gCard.addView(TextView(this).apply {
+            text = "※ 手势映射：背屏 上/下/左/右 划一下 → 主屏执行系统级滑动；轻点 → 点击（位置=点击X/Y）；" +
+                "位移超过识别阈值才判定为滑动。算法与默认值逆向自「妙妙背屏」，滑动更准"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(10f), 0, 0)
+        })
+        page5.addView(gCard)
+
         // 注入通道
         val channelCard = card()
         channelCard.addView(sectionTitle("注入通道"))
@@ -531,11 +605,13 @@ class MainActivity : Activity() {
         rgMode.addView(RadioButton(this).apply { text = "灵触映射"; id = 1001 })
         rgMode.addView(RadioButton(this).apply { text = "体感光标"; id = 1003 })
         rgMode.addView(RadioButton(this).apply { text = "精密触控板"; id = 1002 })
+        rgMode.addView(RadioButton(this).apply { text = "手势映射"; id = 1004 })
         setCard.addView(rgMode)
         rgMode.check(
             when (sp.getString("mode", "direct")) {
                 "pad" -> 1002
                 "gyro" -> 1003
+                "gesture" -> 1004
                 else -> 1001
             }
         )
@@ -920,6 +996,7 @@ class MainActivity : Activity() {
                 when (rgMode.checkedRadioButtonId) {
                     1002 -> "pad"
                     1003 -> "gyro"
+                    1004 -> "gesture"
                     else -> "direct"
                 }
             )
@@ -928,6 +1005,12 @@ class MainActivity : Activity() {
             .putFloat("deadZone", sbDead.progress / 100f)
             .putInt("cursorDp", 16 + sbCursorDp.progress)
             .putInt("mask", sbMask.progress)
+            // v2.3.0 手势参数（gInvert 由 switchRow 独立写入）
+            .putFloat("gThreshold", 0.05f + sbGThresh.progress / 100f)
+            .putFloat("gSwipeLen", 0.15f + sbGLen.progress / 100f)
+            .putInt("gSwipeMs", 120 + sbGMs.progress)
+            .putFloat("gTapX", 0.02f + sbGTapX.progress / 100f)
+            .putFloat("gTapY", 0.02f + sbGTapY.progress / 100f)
             .putString(
                 "channel",
                 when (rgChannel.checkedRadioButtonId) {
@@ -1206,6 +1289,7 @@ class MainActivity : Activity() {
         val mode = when (sp.getString("mode", "direct")) {
             "pad" -> "精密触控板"
             "gyro" -> "体感光标"
+            "gesture" -> "手势映射"
             else -> "灵触映射"
         }
         val ch = when (sp.getString("channel", "auto")) {
