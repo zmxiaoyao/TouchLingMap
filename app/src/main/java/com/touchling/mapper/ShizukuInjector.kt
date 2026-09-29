@@ -64,6 +64,19 @@ class ShizukuInjector : Injector {
         }
     }
 
+    /** v2.2.0：长驻进程（evdev 流式读取） */
+    override fun spawn(cmd: String): SpawnedProcess? {
+        return try {
+            if (!alive()) return null
+            val proc = newRemoteProcess(arrayOf("/system/bin/sh", "-c", cmd)) ?: return null
+            val out = procMember(proc, "getInputStream", InputStream::class.java) as? InputStream
+                ?: return null
+            SpawnedProcess(out) { destroyProc(proc) }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     private fun destroyProc(p: Any) {
         try {
             val m = p.javaClass.declaredMethods.firstOrNull {
