@@ -30,6 +30,17 @@ import android.widget.TextView
 // ---------------------------------------------------------------- 磁贴
 
 class ControlTile : TileService() {
+    // v2.2.3：磁贴展开即刷新状态（此前只有点击时才更新）
+    override fun onStartListening() {
+        super.onStartListening()
+        try {
+            qsTile?.state =
+                if (MirrorService.running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+            qsTile?.updateTile()
+        } catch (_: Throwable) {
+        }
+    }
+
     override fun onClick() {
         super.onClick()
         try {
