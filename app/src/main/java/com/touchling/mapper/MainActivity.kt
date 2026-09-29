@@ -26,6 +26,12 @@ class MainActivity : Activity() {
     private lateinit var sbMask: SeekBar
     // v2.4.1 触控板速度（独立于灵敏度）
     private lateinit var sbPadSens: SeekBar
+    // v2.4.3 手势参数滑条（手感页）
+    private lateinit var sbGThresh: SeekBar
+    private lateinit var sbGLen: SeekBar
+    private lateinit var sbGMs: SeekBar
+    private lateinit var sbGTapX: SeekBar
+    private lateinit var sbGTapY: SeekBar
     private lateinit var swGyro: android.widget.Switch
     private lateinit var swScroll2: android.widget.Switch
 
@@ -540,6 +546,74 @@ class MainActivity : Activity() {
         })
         page5.addView(handCard)
 
+        // 🖐 手势参数（与主流方案手感页一致）
+        page5.addView(pageTitle("手势"))
+        val gCard = card()
+        gCard.addView(sectionTitle("手势"))
+        val tvG1 = sectionTitle("识别阈值")
+        sbGThresh = SeekBar(this).apply {
+            max = 30
+            progress = ((sp.getFloat("threshold", 0.12f) - 0.05f) * 100).toInt().coerceIn(0, 30)
+        }
+        gCard.addView(tvG1)
+        gCard.addView(sbGThresh)
+        bindLabel(tvG1, sbGThresh) {
+            "识别阈值 ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
+        }
+
+        val tvG2 = sectionTitle("滑动距离").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGLen = SeekBar(this).apply {
+            max = 60
+            progress = ((sp.getFloat("swipeLength", 0.46f) - 0.15f) * 100).toInt().coerceIn(0, 60)
+        }
+        gCard.addView(tvG2)
+        gCard.addView(sbGLen)
+        bindLabel(tvG2, sbGLen) {
+            "滑动距离 ${String.format(java.util.Locale.US, "%.2f", 0.15f + it / 100f)}"
+        }
+
+        val tvG3 = sectionTitle("滑动时长").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGMs = SeekBar(this).apply {
+            max = 530
+            progress = (sp.getInt("swipeMs", 260) - 120).coerceIn(0, 530)
+        }
+        gCard.addView(tvG3)
+        gCard.addView(sbGMs)
+        bindLabel(tvG3, sbGMs) { "滑动时长 ${120 + it} ms" }
+
+        gCard.addView(
+            switchRow("上下反转", "invertSwipe").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+
+        val tvG4 = sectionTitle("点击 X").apply { setPadding(0, dp(8f), 0, dp(6f)) }
+        sbGTapX = SeekBar(this).apply {
+            max = 90
+            progress = ((sp.getFloat("tapX", 0.5f) - 0.05f) * 100).toInt().coerceIn(0, 90)
+        }
+        gCard.addView(tvG4)
+        gCard.addView(sbGTapX)
+        bindLabel(tvG4, sbGTapX) {
+            "点击 X ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
+        }
+
+        val tvG5 = sectionTitle("点击 Y").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbGTapY = SeekBar(this).apply {
+            max = 90
+            progress = ((sp.getFloat("tapY", 0.5f) - 0.05f) * 100).toInt().coerceIn(0, 90)
+        }
+        gCard.addView(tvG5)
+        gCard.addView(sbGTapY)
+        bindLabel(tvG5, sbGTapY) {
+            "点击 Y ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
+        }
+
+        gCard.addView(TextView(this).apply {
+            text = "※ 「上下反转」即时作用于灵触映射；识别阈值 / 滑动距离 / 滑动时长 / 点击X·Y 为手势参数"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(10f), 0, 0)
+        })
+        page5.addView(gCard)
+
 
         // 背屏方向（0°/90°/180°/270° 分段）
         page5.addView(pageTitle("背屏方向"))
@@ -982,6 +1056,12 @@ class MainActivity : Activity() {
             .putInt("cursorSize", 16 + sbCursorDp.progress)
             .putFloat("touchpad", 0.3f + sbPadSens.progress / 100f)
             .putInt("mask", sbMask.progress)
+            // v2.4.3 手势参数（invertSwipe 由 switchRow 独立写入）
+            .putFloat("threshold", 0.05f + sbGThresh.progress / 100f)
+            .putFloat("swipeLength", 0.15f + sbGLen.progress / 100f)
+            .putInt("swipeMs", 120 + sbGMs.progress)
+            .putFloat("tapX", 0.05f + sbGTapX.progress / 100f)
+            .putFloat("tapY", 0.05f + sbGTapY.progress / 100f)
             .putString(
                 "channel",
                 when (rgChannel.checkedRadioButtonId) {
