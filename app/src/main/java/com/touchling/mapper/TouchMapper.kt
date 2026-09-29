@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /** 运行配置（从 SharedPreferences 读取） */
@@ -36,7 +37,14 @@ class Cfg(
     val bootAuto: Boolean,
     val autoApp: Boolean,
     val autoApps: String,
-    val ballOn: Boolean
+    val ballOn: Boolean,
+    // v2.3.0 手势映射参数（算法逆向自「妙妙背屏」）
+    val gThreshold: Float, // 识别阈值 0.05~0.35，默认 0.12
+    val gSwipeLen: Float, // 滑动距离（占屏幕比例）0.15~0.75，默认 0.46
+    val gSwipeMs: Int, // 滑动时长 120~650ms，默认 260
+    val gTapX: Float, // 点击 X（归一化）默认 0.5
+    val gTapY: Float, // 点击 Y（归一化）默认 0.5
+    val gInvert: Boolean // 手势上下反转（妙妙 invertSwipe）
 ) {
     /** 平滑系数：把"平滑时间(ms)"换算成每帧插值比例 */
     val smoothFactor: Float
@@ -90,7 +98,14 @@ class Cfg(
                 b("bootAuto", false),
                 b("autoApp", false),
                 s("autoApps", ""),
-                b("ballOn", false)
+                b("ballOn", false),
+                // v2.3.0 手势参数（默认值 = 妙妙官方默认）
+                f("gThreshold", 0.12f),
+                f("gSwipeLen", 0.46f),
+                i("gSwipeMs", 260),
+                f("gTapX", 0.5f),
+                f("gTapY", 0.5f),
+                b("gInvert", false)
             )
             if (corrupted) Diag.log("Cfg.load: 存在类型损坏的配置项，已回退默认值")
             return cfg
@@ -146,7 +161,109 @@ class TouchMapper(
     }
 
     fun handle(e: MotionEvent, view: View): Boolean {
-        return if (cfg.mode == "gyro") false else if (cfg.mode == "pad") pad(e, view) else direct(e, view)
+        return when (cfg.mode) {
+            "gyro" -> false
+            "pad" -> pad(e, view)
+            "gesture" -> gesture(e, view) // v2.3.0 手势映射（妙妙同款）
+            else -> direct(e, view)
+        }
+    }
+
+    // ================= v2.3.0 手势映射（逆向自妙妙背屏 l2/x + p2/p） =================
+    // 识别：DOWN 记起点 → MOVE 记最大位移 hypot（归一化）→ UP 判定
+    //   位移 >= threshold → 滑动手势（主轴定方向）→ 注入系统级 input -d 0 swipe（中心±swipeLen/2, swipeMs）
+    //   否则短按 → input -d 0 tap（tapX, tapY）；长按(>=700ms) → 同点长 swipe
+    // 注入带冷却（上一手势执行中忽略新手势）——妙妙 f1075s 同款防重入
+    private var gDown = false
+    private var gSX = 0f
+    private var gSY = 0f
+    private var gMax = 0f
+    private var gT0 = 0L
+    private var gCool = 0L
+
+    private fun gesture(e: MotionEvent, view: View): Boolean {
+        val bw = view.width.toFloat().coerceAtLeast(1f)
+        val bh = view.height.toFloat().coerceAtLeast(1f)
+        var nx = e.x / bw
+        var ny = e.y / bh
+        val rot = cfg.rearRot
+        if (rot == 90) {
+            val t = nx; nx = 1f - ny; ny = t
+        } else if (rot == 180) {
+            nx = 1f - nx; ny = 1f - ny
+        } else if (rot == 270) {
+            val t = nx; nx = ny; ny = 1f - t
+        }
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                gDown = true; gSX = nx; gSY = ny; gMax = 0f; gT0 = now()
+            }
+            MotionEvent.ACTION_MOVE -> if (gDown) {
+                gMax = maxOf(gMax, hypot(nx - gSX, ny - gSY))
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!gDown) return true
+                gDown = false
+                if (now() < gCool) return null2()
+                val dur = now() - gT0
+                val dx = nx - gSX
+                val dy = ny - gSY
+                when {
+                    gMax >= cfg.gThreshold -> {
+                        if (abs(dx) >= abs(dy)) {
+                            injectSwipe(if (dx > 0) "right" else "left")
+                        } else {
+                            val downWard = if (cfg.gInvert) dy <= 0 else dy > 0
+                            injectSwipe(if (downWard) "down" else "up")
+                        }
+                    }
+                    dur >= 700 -> {
+                        // 长按：同点长 swipe（系统识别为长按）
+                        val x = (mainW * cfg.gTapX).toInt().coerceIn(1, mainW - 2)
+                        val y = (mainH * cfg.gTapY).toInt().coerceIn(1, mainH - 2)
+                        injector.send("/system/bin/input -d 0 swipe $x $y $x $y 800")
+                        gCool = now() + 900
+                    }
+                    else -> {
+                        val x = (mainW * cfg.gTapX).toInt().coerceIn(1, mainW - 2)
+                        val y = (mainH * cfg.gTapY).toInt().coerceIn(1, mainH - 2)
+                        injector.send("/system/bin/input -d 0 tap $x $y")
+                        gCool = now() + 120
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    private fun null2(): Boolean = true
+
+    /** 注入系统级滑动：起点/终点 = 主屏中心 ± swipeLen/2（clamp 到 6%~94% 屏内，妙妙同款） */
+    private fun injectSwipe(dir: String) {
+        val w = mainW.toFloat()
+        val h = mainH.toFloat()
+        val horiz = dir == "left" || dir == "right"
+        val half = (cfg.gSwipeLen * if (horiz) w else h) / 2f
+        val cx = w / 2f
+        val cy = h / 2f
+        val x1: Int
+        val y1: Int
+        val x2: Int
+        val y2: Int
+        if (horiz) {
+            val c = cx.coerceIn(0.06f * w + half, 0.94f * w - half)
+            val a = (if (dir == "right") c - half else c + half).toInt().coerceIn(1, mainW - 2)
+            val b = (if (dir == "right") c + half else c - half).toInt().coerceIn(1, mainW - 2)
+            x1 = a; y1 = cy.toInt(); x2 = b; y2 = cy.toInt()
+        } else {
+            val c = cy.coerceIn(0.06f * h + half, 0.94f * h - half)
+            val a = (if (dir == "down") c - half else c + half).toInt().coerceIn(1, mainH - 2)
+            val b = (if (dir == "down") c + half else c - half).toInt().coerceIn(1, mainH - 2)
+            x1 = cx.toInt(); y1 = a; x2 = cx.toInt(); y2 = b
+        }
+        injector.send("/system/bin/input -d 0 swipe $x1 $y1 $x2 $y2 ${cfg.gSwipeMs}")
+        gCool = now() + cfg.gSwipeMs + 60
+        Diag.log("手势注入: $dir swipe($x1,$y1→$x2,$y2,${cfg.gSwipeMs}ms)")
     }
 
     /** 灵触映射：背屏 → 主屏 直接压缩映射（支持背屏方向旋转） */
