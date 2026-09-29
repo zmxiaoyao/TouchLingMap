@@ -33,6 +33,16 @@ class RootInjector : Injector {
         }
     }
 
+    /** 独立进程执行并回读输出 */
+    override fun exec(cmd: String): String = try {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        val out = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        out.trim()
+    } catch (t: Throwable) {
+        "EXEC_ERR:$t"
+    }
+
     private fun drain(input: InputStream) {
         Thread {
             try {
