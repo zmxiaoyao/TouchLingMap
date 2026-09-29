@@ -24,6 +24,8 @@ class MainActivity : Activity() {
     private lateinit var rgChannel: RadioGroup
     private lateinit var sbSens: SeekBar
     private lateinit var sbMask: SeekBar
+    private lateinit var swGyro: android.widget.Switch
+    private lateinit var swScroll2: android.widget.Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,7 +115,7 @@ class MainActivity : Activity() {
             setPadding(0, dp(6f), 0, dp(2f))
         })
         root.addView(TextView(this).apply {
-            text = "小米背屏 → 主屏 · 映射控制台 v0.3.0"
+            text = "小米背屏 → 主屏 · 映射控制台 v0.4.0"
             textSize = 13f
             setTextColor(0xFF8E8E93.toInt())
             setPadding(0, 0, 0, dp(16f))
@@ -200,6 +202,23 @@ class MainActivity : Activity() {
         setCard.addView(sbMask)
         root.addView(setCard)
 
+        // 特色功能
+        val featCard = card()
+        featCard.addView(sectionTitle("特色功能"))
+        swGyro = android.widget.Switch(this).apply {
+            text = "体感空鼠（倾斜手机移光标，轻点=点击）"
+            textSize = 14f
+            isChecked = sp.getBoolean("gyro", false)
+        }
+        featCard.addView(swGyro)
+        swScroll2 = android.widget.Switch(this).apply {
+            text = "双指滚动 / 双指轻点=快捷面板"
+            textSize = 14f
+            isChecked = sp.getBoolean("scroll2", true)
+        }
+        featCard.addView(swScroll2)
+        root.addView(featCard)
+
         // 提示
         root.addView(TextView(this).apply {
             text = "首次使用：装 Shizuku（无线调试启动）→ 点「授权 Shizuku」\n" +
@@ -229,6 +248,8 @@ class MainActivity : Activity() {
                     else -> "auto"
                 }
             )
+            .putBoolean("gyro", swGyro.isChecked)
+            .putBoolean("scroll2", swScroll2.isChecked)
             .apply()
     }
 
