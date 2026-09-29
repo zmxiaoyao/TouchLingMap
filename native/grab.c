@@ -7,7 +7,8 @@
  * 3. 流式输出触摸事件（简化文本协议，供 app 端 EvdevTouch 解析）：
  *      X <十进制>   ABS_MT_POSITION_X
  *      Y <十进制>   ABS_MT_POSITION_Y
- *      B <0|1>      BTN_TOUCH 松/按
+ *      B <0|1>      按下/抬起（v2.4.6：由 ABS_MT_TRACKING_ID 与 BTN_TOUCH 双源合成，
+ *                   兼容"不发 BTN_TOUCH、只用 TRACKING_ID"的现代触摸屏）
  *      S            SYN_REPORT（帧分隔，触发一次 MOVE）
  *      G_READY      独占成功（首行）
  *      G_ERR <原因> 独占失败（首行，调用方回退 getevent 监听）
@@ -44,16 +45,27 @@ int main(int argc, char **argv) {
     printf("G_READY\n");
 
     struct input_event ev;
+    int active = 0; /* v2.4.6：当前触点状态（TRACKING_ID/BTN_TOUCH 双源合成，变化才输出） */
     while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
         if (ev.type == EV_ABS) {
             if (ev.code == ABS_MT_POSITION_X) {
                 printf("X %d\n", ev.value);
             } else if (ev.code == ABS_MT_POSITION_Y) {
                 printf("Y %d\n", ev.value);
+            } else if (ev.code == ABS_MT_TRACKING_ID) {
+                int now = (ev.value != -1) ? 1 : 0;
+                if (now != active) {
+                    active = now;
+                    printf("B %d\n", active);
+                }
             }
         } else if (ev.type == EV_KEY) {
             if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {
-                printf("B %d\n", ev.value ? 1 : 0);
+                int now = ev.value ? 1 : 0;
+                if (now != active) {
+                    active = now;
+                    printf("B %d\n", active);
+                }
             }
         } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
             printf("S\n");
