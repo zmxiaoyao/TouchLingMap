@@ -29,10 +29,10 @@
         <!-- 背屏镜像 Activity（由服务用 am start 加 display 参数拉到背屏） -->
         <activity
             android:name=".RearActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
-            android:configChanges="orientation|screenSize|screenLayout|uiMode|density"
+            android:configChanges="orientation|screenSize|screenLayout|uiMode|density|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
         <!-- Shizuku 授权提供器 -->
