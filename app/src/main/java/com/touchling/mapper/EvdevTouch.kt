@@ -7,7 +7,7 @@ import android.view.View
 import java.io.InputStream
 
 /**
- * v2.2.0 evdev 直读背屏触摸（参考「妙妙背屏」原理）
+ * v2.2.0 evdev 直读背屏触摸（内核层直读原理）
  *
  * 通过 getevent -lt /dev/input/eventN 流式读取内核触摸事件，
  * 解析 ABS_MT_POSITION_X/Y + BTN_TOUCH，合成 MotionEvent 喂给 TouchMapper，
@@ -29,20 +29,48 @@ class EvdevTouch(
     private var maxX = 97599
     private var maxY = 59599
 
-    fun start(devicePath: String, w: Int, h: Int) {
+    fun start(devicePath: String, w: Int, h: Int, grabPath: String? = null) {
         if (running) return
         device = devicePath
         maxX = w
         maxY = h
         running = true
         thread = Thread {
-            onLog("evdev 线程启动 device=$devicePath ($w x $h)")
+            onLog("evdev 线程启动 device=$devicePath ($w x $h) 独占=${grabPath != null}")
             try {
-                val sp = spawn("/system/bin/getevent -lt $devicePath")
-                if (sp == null) {
-                    onLog("evdev: 无法创建进程（通道不支持 spawn）")
-                    running = false
-                    return@Thread
+                var sp: SpawnedProcess? = null
+                var br: java.io.BufferedReader? = null
+
+                // v2.4.0：独占背屏触摸（EVIOCGRAB）—— 失败自动回退 getevent 监听
+                if (grabPath != null) {
+                    val g = spawn("$grabPath $devicePath")
+                    if (g != null) {
+                        val gbr = g.stream.bufferedReader()
+                        val first = gbr.readLine()
+                        if (first == "G_READY") {
+                            sp = g
+                            br = gbr
+                            onLog("独占背屏触摸已接管（EVIOCGRAB，其他应用收不到背屏触摸）")
+                        } else {
+                            onLog("独占失败: ${first ?: "无响应"} → 回退 getevent 监听")
+                            try {
+                                g.close()
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    } else {
+                        onLog("独占: 无法创建进程 → 回退 getevent 监听")
+                    }
+                }
+
+                if (br == null) {
+                    sp = spawn("/system/bin/getevent -lt $devicePath")
+                    if (sp == null) {
+                        onLog("evdev: 无法创建进程（通道不支持 spawn）")
+                        running = false
+                        return@Thread
+                    }
+                    br = sp.stream.bufferedReader()
                 }
                 spawned = sp
                 val fw = ((w + 1) / 100).coerceAtLeast(1)
@@ -50,10 +78,42 @@ class EvdevTouch(
                 fakeView = View(ctx).apply { layout(0, 0, fw, fh) }
                 var pendX = -1f
                 var pendY = -1f
-                val br = sp.stream.bufferedReader()
+                var wantDown = false
+                val reader = br
                 while (running) {
-                    val line = br.readLine() ?: break
+                    val line = reader.readLine() ?: break
                     when {
+                        // ---- grab 工具协议（十进制，首字符区分） ----
+                        line.startsWith("X ") -> {
+                            pendX = line.substring(2).trim().toFloatOrNull() ?: -1f
+                        }
+                        line.startsWith("Y ") -> {
+                            pendY = line.substring(2).trim().toFloatOrNull() ?: -1f
+                        }
+                        line == "B 1" -> {
+                            if (pendX >= 0 && pendY >= 0) {
+                                emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                            } else {
+                                wantDown = true
+                            }
+                        }
+                        line == "B 0" -> {
+                            wantDown = false
+                            if (pendX >= 0 && pendY >= 0) {
+                                emit(MotionEvent.ACTION_UP, pendX, pendY)
+                            }
+                        }
+                        line == "S" -> {
+                            if (pendX >= 0 && pendY >= 0) {
+                                if (wantDown) {
+                                    wantDown = false
+                                    emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                                } else {
+                                    emit(MotionEvent.ACTION_MOVE, pendX, pendY)
+                                }
+                            }
+                        }
+                        // ---- getevent 协议（十六进制） ----
                         line.contains("ABS_MT_POSITION_X") -> {
                             val v = hexOf(line)
                             if (v >= 0) pendX = v.toFloat()
