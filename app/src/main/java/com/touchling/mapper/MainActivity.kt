@@ -757,6 +757,7 @@ class MainActivity : Activity() {
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 )
             })
+            row.addView(smallBtn("预览") { previewTheme(f) })
             row.addView(smallBtn("选用") {
                 sp.edit().putString("aiThemeFile", f.name).putInt("htmlTheme", 4).apply()
                 persistCfg()
@@ -775,6 +776,36 @@ class MainActivity : Activity() {
                 refreshThemeList()
             })
             box.addView(row)
+        }
+    }
+
+    /** 主屏弹窗预览主题（v1.3.0） */
+    private fun previewTheme(f: java.io.File) {
+        try {
+            val wv = android.webkit.WebView(this)
+            wv.settings.javaScriptEnabled = true
+            wv.settings.useWideViewPort = true
+            wv.settings.loadWithOverviewMode = true
+            wv.setBackgroundColor(Color.BLACK)
+            wv.loadDataWithBaseURL(null, f.readText(), "text/html", "UTF-8", null)
+
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+                setBackgroundColor(0xFF0B0B0D.toInt())
+            }
+            box.addView(wv, LinearLayout.LayoutParams(-1, 0, 1f))
+            box.addView(smallBtn("关闭预览") { })
+
+            val dlg = android.app.Dialog(this)
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            dlg.setContentView(box)
+            val dm = resources.displayMetrics
+            dlg.window?.setLayout((dm.widthPixels * 0.92f).toInt(), (dm.heightPixels * 0.62f).toInt())
+            (box.getChildAt(1) as Button).setOnClickListener { dlg.dismiss() }
+            dlg.show()
+        } catch (t: Throwable) {
+            tvAiStatus.text = "预览失败：${t.message?.take(80)}"
         }
     }
 
