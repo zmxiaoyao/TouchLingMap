@@ -162,7 +162,7 @@ class MirrorService : Service() {
         // 3.5 主屏光标（v0.5.0）：触控板/体感模式 → 光标画在主屏，背屏当触控板
         val mc = MainCursor(this, cfg.cursorStyle, cfg.cursorSizeIdx, cfg.cursorColor)
         mainCursor = mc
-        if (cfg.mode == "pad" || cfg.gyro) {
+        if (cfg.toy == 0 && (cfg.mode == "pad" || cfg.gyro)) {
             if (mc.available) {
                 mc.show()
                 cursorSink = { x, y -> mc.move(x, y) }
