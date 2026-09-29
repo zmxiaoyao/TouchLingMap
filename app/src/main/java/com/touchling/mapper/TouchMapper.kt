@@ -302,7 +302,7 @@ class TouchMapper(
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastSendX = x; lastSendY = y; lastSendT = now()
-                injector.down(x, y)
+                emitDown(x, y) // v2.4.8：补上统计包装（此前漏包装导致"注入统计 D=0"误报）
             }
             MotionEvent.ACTION_MOVE -> {
                 val t = now()
