@@ -65,6 +65,19 @@ class RearActivity : Activity() {
     private var twoLastY = 0f
     private var twoLastScrollT = 0L
 
+    // v2.2.2：服务停止后自动退出，防止黑屏窗口残留在背屏/主屏
+    private val uiH = android.os.Handler(android.os.Looper.getMainLooper())
+    private val stopPoll = object : Runnable {
+        override fun run() {
+            if (!MirrorService.running) {
+                Diag.log("服务已停止 → 背屏自动退出（防黑屏残留）")
+                finish()
+                return
+            }
+            uiH.postDelayed(this, 1000)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Diag.init(applicationContext)
@@ -72,6 +85,7 @@ class RearActivity : Activity() {
         lastTaskId = taskId
         arrived = false
         alive = true
+        uiH.postDelayed(stopPoll, 1500)
 
         // 主屏阶段：全屏但全透明+不可触摸（保证 WM 视为可见，避免小窗被忽略）
         val wl = window.attributes
@@ -478,6 +492,7 @@ val frame = BackFrame(this)
     override fun onDestroy() {
         super.onDestroy()
         alive = false
+        uiH.removeCallbacks(stopPoll)
         try { gyroListener?.let { sensorManager?.unregisterListener(it) } } catch (_: Throwable) {}
         try { vdisplay?.release() } catch (_: Throwable) {}
         Diag.log("RearActivity onDestroy")
