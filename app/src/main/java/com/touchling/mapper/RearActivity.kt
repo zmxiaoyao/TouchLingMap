@@ -168,6 +168,15 @@ class RearActivity : Activity() {
     }
 
     private fun moveCursorTo(x: Float, y: Float, visible: Boolean) {
+        // v0.5.0：光标优先画在【主屏】（悬浮窗）——背屏当触控板，眼睛看主屏
+        val sink = MirrorService.cursorSink
+        if (sink != null) {
+            sink.invoke(x, y)
+            // 主屏已有光标，背屏内光标不再显示（避免"重影"）
+            cursor?.visibility = View.INVISIBLE
+            return
+        }
+        // 回退：无悬浮窗权限时，光标画在背屏镜像内
         val c = cursor ?: return
         val fw = c.parent?.let { (it as View).width } ?: 1
         val fh = c.parent?.let { (it as View).height } ?: 1
