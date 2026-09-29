@@ -39,16 +39,18 @@ class Cfg(
     companion object {
         fun load(ctx: Context): Cfg {
             val sp = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
+            val mode = sp.getString("mode", "direct") ?: "direct"
             return Cfg(
-                sp.getString("mode", "direct") ?: "direct",
+                mode,
                 sp.getFloat("sens", 1f),
                 sp.getInt("mask", 0),
                 sp.getString("channel", "auto") ?: "auto",
-                sp.getBoolean("gyro", false),
+                // v2.1.0：模式=体感光标 时强制开启体感
+                sp.getBoolean("gyro", false) || mode == "gyro",
                 sp.getBoolean("scroll2", true),
                 sp.getBoolean("invX", false),
                 sp.getBoolean("invY", false),
-                sp.getInt("cursorStyle", 0),
+                sp.getInt("cursorStyle", 2),
                 sp.getInt("cursorSizeIdx", 1),
                 sp.getInt("cursorColor", 0),
                 sp.getInt("rearBg", 0),
@@ -115,7 +117,7 @@ class TouchMapper(
     }
 
     fun handle(e: MotionEvent, view: View): Boolean {
-        return if (cfg.mode == "pad") pad(e, view) else direct(e, view)
+        return if (cfg.mode == "gyro") false else if (cfg.mode == "pad") pad(e, view) else direct(e, view)
     }
 
     /** 灵触映射：背屏 → 主屏 直接压缩映射（支持背屏方向旋转） */
