@@ -293,6 +293,28 @@ class MainActivity : Activity() {
     private fun startProjection() {
         Diag.log("用户点击 开始映射")
         persistCfg()
+        // v0.5.0：触控板/体感模式的光标画在主屏 → 需要悬浮窗权限
+        val mode = sp.getString("mode", "direct") ?: "direct"
+        val gyroOn = sp.getBoolean("gyro", false)
+        if ((mode == "pad" || gyroOn) && !android.provider.Settings.canDrawOverlays(this)) {
+            Diag.log("缺悬浮窗权限 → 引导授权")
+            Toast.makeText(
+                this,
+                "请授予「显示在其他应用上层」权限（光标才能显示在主屏），授权后回来再点一次开始映射",
+                Toast.LENGTH_LONG
+            ).show()
+            try {
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (t: Throwable) {
+                Diag.log("打开悬浮窗设置失败: $t")
+            }
+            return
+        }
         val channel = sp.getString("channel", "auto") ?: "auto"
         when (channel) {
             "root" -> if (!Injector.rootAvailable()) {
