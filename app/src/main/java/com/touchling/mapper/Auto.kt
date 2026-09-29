@@ -20,7 +20,7 @@ import android.view.WindowManager
 import android.widget.TextView
 
 /**
- * v2.2.0 自动化与快捷（参考「妙妙背屏」）
+ * v2.2.0 自动化与快捷
  * - ControlTile   控制中心磁贴，一键启停
  * - BootReceiver  开机自启
  * - WatchService  按应用自动启停（需要「使用情况访问」权限）
