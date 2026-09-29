@@ -235,6 +235,8 @@ class MainActivity : Activity() {
         styleCard.addView(optionRow("cursorSizeIdx", 1, listOf("小", "中", "大")))
         styleCard.addView(sectionTitle("背屏显示样式"))
         styleCard.addView(optionRow("rearBg", 0, listOf("镜像", "纯黑", "网格")))
+        styleCard.addView(sectionTitle("背屏互动玩具"))
+        styleCard.addView(optionRow("toy", 0, listOf("关闭", "转盘", "真心话", "木鱼", "骰子")))
         styleCard.addView(sectionTitle("方向反转（触控板 / 体感）"))
         styleCard.addView(switchRow("左右反转", "invX"))
         styleCard.addView(switchRow("上下反转", "invY"))
