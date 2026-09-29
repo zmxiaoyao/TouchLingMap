@@ -184,31 +184,33 @@ class MirrorService : Service() {
         }
         Diag.log("keeper 线程已启动")
 
-        // 5. 拉起背屏镜像 Activity（shell 启动，绕过 BAL 限制）
-        //    输出写到日志文件便于排查（shell 可写 sdcard）
+        // 5. 背屏投放（v0.3.2 方案，参考 MRSS）：
+        //    HyperOS 禁止 startActivity 直接上背屏（launchDisplayId 会被拒），
+        //    因此：先在本屏正常启动 RearActivity，再由 shell 用
+        //    `service call activity_task 50` 把它的任务整体搬到背屏。
         val dispId = back.displayId
-        inj.send(
-            "am start --display $dispId -n com.touchling.mapper/.RearActivity " +
-                "> /sdcard/Download/背屏映射/amstart.log 2>&1"
-        )
-        Diag.log("已发送 shell 启动命令 display=$dispId")
+        try {
+            startActivity(
+                Intent(this, RearActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            Diag.log("已在主屏启动 RearActivity（等待搬运）")
+        } catch (t: Throwable) {
+            Diag.log("主屏启动 RearActivity 失败: $t")
+        }
 
-        // 应用内兜底：延迟 1.2s 再用 ActivityOptions 拉一次（singleTask 幂等）
         mainHandler.postDelayed({
             if (projection == null) return@postDelayed
-            try {
-                val intent = Intent(this, RearActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
-                )
-                val opts = android.app.ActivityOptions.makeBasic().apply {
-                    launchDisplayId = dispId
-                }
-                startActivity(intent, opts.toBundle())
-                Diag.log("应用内 startActivity 兜底已执行")
-            } catch (t: Throwable) {
-                Diag.log("应用内兜底失败: $t")
-            }
-        }, 1200)
+            val logPath = "/sdcard/Download/背屏映射/amstart.log"
+            val cmd = "tid=\$(cat /sdcard/Android/data/com.touchling.mapper/files/taskid.txt 2>/dev/null); " +
+                "echo \"taskId=\$tid\" > $logPath; " +
+                "if [ -n \"\$tid\" ]; then " +
+                "service call activity_task 50 i32 \$tid i32 $dispId >> $logPath 2>&1; " +
+                "sleep 1; dumpsys activity activities | grep -m2 RearActivity >> $logPath 2>&1; " +
+                "else echo 'taskid.txt 缺失' >> $logPath; fi"
+            inj.send(cmd)
+            Diag.log("已发送搬任务命令 → display=$dispId")
+        }, 900)
 
         if (!ready) {
             toast("注入通道未就绪——镜像可用，但触摸不会生效")
