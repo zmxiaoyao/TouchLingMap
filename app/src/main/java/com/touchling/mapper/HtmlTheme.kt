@@ -36,8 +36,47 @@ class HtmlThemeView(
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
         settings.textZoom = 100
+        // v1.2.0 尺寸自适应：宽视口 + 载入即缩放到合适
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        settings.setSupportZoom(false)
+        settings.builtInZoomControls = false
+        settings.displayZoomControls = false
+        webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                // 注入自适应样式：顺手把溢出内容缩放到刚好铺满背屏
+                view?.evaluateJavascript(FIT_JS, null)
+            }
+        }
         addJavascriptInterface(Bridge(), "TouchLing")
         loadTheme()
+    }
+
+    companion object {
+        /** 注入到主题页尾：统一盒模型 + 溢出自动缩放（背屏 976x596 不再超出） */
+        private val FIT_JS = """
+(function(){
+  try{
+    var st=document.createElement('style');
+    st.textContent='html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;box-sizing:border-box}'+
+      '*,*:before,*:after{box-sizing:border-box}'+
+      'img,video,canvas{max-width:100%;max-height:100%}';
+    if(document.head){document.head.appendChild(st);}
+    var d=document.documentElement, b=document.body||d;
+    var w=Math.max(d.scrollWidth,b.scrollWidth)||1;
+    var h=Math.max(d.scrollHeight,b.scrollHeight)||1;
+    var vw=window.innerWidth||1, vh=window.innerHeight||1;
+    var sc=Math.min(vw/w, vh/h);
+    if(sc<0.995){
+      b.style.transformOrigin='top left';
+      b.style.transform='scale('+sc+')';
+      b.style.width=(100/sc)+'%';
+      b.style.height=(100/sc)+'%';
+    }
+  }catch(e){}
+})();
+""".trimIndent()
     }
 
     inner class Bridge {
