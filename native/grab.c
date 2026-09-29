@@ -1,0 +1,66 @@
+/*
+ * v2.4.0 独占背屏触摸工具（grab）
+ *
+ * 用法: grab /dev/input/eventN
+ * 1. 打开触摸设备（需 shell 属 input 组，或 root）
+ * 2. ioctl(EVIOCGRAB) 独占 —— 独占期间系统与其他应用收不到该设备触摸
+ * 3. 流式输出触摸事件（简化文本协议，供 app 端 EvdevTouch 解析）：
+ *      X <十进制>   ABS_MT_POSITION_X
+ *      Y <十进制>   ABS_MT_POSITION_Y
+ *      B <0|1>      BTN_TOUCH 松/按
+ *      S            SYN_REPORT（帧分隔，触发一次 MOVE）
+ *      G_READY      独占成功（首行）
+ *      G_ERR <原因> 独占失败（首行，调用方回退 getevent 监听）
+ * 进程退出（被 kill）时 fd 关闭，内核自动解除独占。
+ *
+ * 编译（GitHub Actions NDK，静态链接 bionic）：
+ *   aarch64-linux-android31-clang -O2 -static -o app/src/main/assets/grab native/grab.c
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <linux/input.h>
+#include <sys/ioctl.h>
+
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "usage: grab <device>\n");
+        return 2;
+    }
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
+    int fd = open(argv[1], O_RDONLY);
+    if (fd < 0) {
+        printf("G_ERR open\n");
+        return 1;
+    }
+    if (ioctl(fd, EVIOCGRAB, 1) < 0) {
+        printf("G_ERR grab\n");
+        close(fd);
+        return 1;
+    }
+    printf("G_READY\n");
+
+    struct input_event ev;
+    while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
+        if (ev.type == EV_ABS) {
+            if (ev.code == ABS_MT_POSITION_X) {
+                printf("X %d\n", ev.value);
+            } else if (ev.code == ABS_MT_POSITION_Y) {
+                printf("Y %d\n", ev.value);
+            }
+        } else if (ev.type == EV_KEY) {
+            if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {
+                printf("B %d\n", ev.value ? 1 : 0);
+            }
+        } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
+            printf("S\n");
+        }
+    }
+
+    ioctl(fd, EVIOCGRAB, 0);
+    close(fd);
+    return 0;
+}
