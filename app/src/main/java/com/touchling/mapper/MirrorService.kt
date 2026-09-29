@@ -618,20 +618,22 @@ class MirrorService : Service() {
     }
 
     /** v2.4.5：反复 release 直到 held=false（acquire 可能被多次调用导致 refCount>1） */
-    private fun releaseWakelockUntilFree(inj: Injector, displayId: Int): String = try {
-        for (i in 1..6) {
-            inj.exec("cmd power set-wakelock release -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
-            val line = inj.exec("cmd power set-wakelock list")
-                .lines()
-                .firstOrNull {
-                    it.contains("Display $displayId, wakelock type: SCREEN_BRIGHT_WAKE_LOCK")
-                }
-            if (line == null) return "已释放（无锁记录）"
-            if (!line.contains("held=true")) return "已释放（第${i}次，held=false）"
+    private fun releaseWakelockUntilFree(inj: Injector, displayId: Int): String {
+        return try {
+            for (i in 1..6) {
+                inj.exec("cmd power set-wakelock release -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
+                val line = inj.exec("cmd power set-wakelock list")
+                    .lines()
+                    .firstOrNull {
+                        it.contains("Display $displayId, wakelock type: SCREEN_BRIGHT_WAKE_LOCK")
+                    }
+                if (line == null) return "已释放（无锁记录）"
+                if (!line.contains("held=true")) return "已释放（第${i}次，held=false）"
+            }
+            "仍持锁（需检查 list 输出）"
+        } catch (t: Throwable) {
+            "错误: $t"
         }
-        "仍持锁（需检查 list 输出）"
-    } catch (t: Throwable) {
-        "错误: $t"
     }
 
     private fun activateRear(inj: Injector, displayId: Int) {
