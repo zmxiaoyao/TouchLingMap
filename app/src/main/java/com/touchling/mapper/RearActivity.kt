@@ -97,6 +97,16 @@ class RearActivity : Activity() {
         val sv = SurfaceView(this)
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
+        // 背屏显示样式（v0.6.0）：0镜像 / 1纯黑 / 2网格
+        val rearBg = cfg?.rearBg ?: 0
+        if (rearBg != 0) {
+            sv.visibility = View.GONE
+            frame.setBackgroundColor(Color.BLACK)
+            if (rearBg == 2) {
+                frame.addView(GridView(this), FrameLayout.LayoutParams(-1, -1))
+            }
+        }
+
         val mask = View(this).apply {
             setBackgroundColor(Color.BLACK)
             alpha = (cfg?.mask ?: 0) / 100f
@@ -142,6 +152,10 @@ class RearActivity : Activity() {
 
         sv.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
+                if ((cfg?.rearBg ?: 0) != 0) {
+                    Diag.log("背屏样式=${cfg?.rearBg}（非镜像）→ 跳过 VirtualDisplay")
+                    return
+                }
                 val proj = MirrorService.projection ?: run {
                     Diag.log("surfaceCreated 但 projection=null")
                     return
@@ -233,9 +247,11 @@ class RearActivity : Activity() {
                 val t = SystemClock.uptimeMillis()
                 if (t - lastGyroT < 40) return
                 lastGyroT = t
-                // values: 0=pitch轴 1=roll轴 2=yaw轴
-                val dx = -ev.values[2] * 14f
-                val dy = -ev.values[0] * 14f
+                // values: 0=pitch轴 1=roll轴 2=yaw轴（支持左右/上下反转）
+                val ix = if (cfg?.invX == true) -1f else 1f
+                val iy = if (cfg?.invY == true) -1f else 1f
+                val dx = -ev.values[2] * 14f * ix
+                val dy = -ev.values[0] * 14f * iy
                 gx = (gx + dx).coerceIn(0f, mainW - 1f)
                 gy = (gy + dy).coerceIn(0f, mainH - 1f)
                 moveCursorTo(gx, gy, true)
@@ -255,8 +271,8 @@ class RearActivity : Activity() {
                 gDownX = e.x; gDownY = e.y; gMoved = 0f
             }
             MotionEvent.ACTION_MOVE -> {
-                gx = (gx + (e.x - gDownX) * 1.2f).coerceIn(0f, mainW - 1f)
-                gy = (gy + (e.y - gDownY) * 1.2f).coerceIn(0f, mainH - 1f)
+                gx = (gx + (e.x - gDownX) * 1.2f * (if (cfg?.invX == true) -1f else 1f)).coerceIn(0f, mainW - 1f)
+                gy = (gy + (e.y - gDownY) * 1.2f * (if (cfg?.invY == true) -1f else 1f)).coerceIn(0f, mainH - 1f)
                 gMoved += hypot(e.x - gDownX, e.y - gDownY)
                 gDownX = e.x; gDownY = e.y
                 moveCursorTo(gx, gy, true)
