@@ -282,31 +282,14 @@ class MirrorService : Service() {
 
         // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块）
         val dispId = back.displayId
-        // v2.4.1：背屏常亮窗口（保持 digitizer 唤醒，无需手动点亮）
+        rearDispId = dispId
+        // v2.4.2：背屏自动激活（按屏常亮锁 + 按屏唤醒，参考实现同款）；v2.4.1 常亮窗口作双保险
         showKeepAlive(dispId)
+        activateRear(inj, dispId)
         val pureTouch =
             noProjection && cfg.evdev && !displayOnly && cfg.htmlTheme == 0 && cfg.toy == 0
         if (pureTouch) {
             Diag.log("纯触控（免投屏+evdev）：跳过背屏 Activity 与搬运 → 主屏无黑窗")
-            mainHandler.postDelayed({
-                Thread {
-                    // v2.4.1：密集点亮直到背屏真正 ON（实测首次事务常把 DOZE→OFF，要打 2~3 次）
-                    val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-                    for (i in 1..8) {
-                        val wake = inj.exec(
-                            "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
-                                "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
-                        )
-                        val st = dm.getDisplay(dispId)?.state
-                        Diag.log("点亮背屏(纯触控#$i): state=$st ${wake.ifBlank { "无输出" }}")
-                        if (st == android.view.Display.STATE_ON) break
-                        try {
-                            Thread.sleep(1000)
-                        } catch (_: Throwable) {
-                        }
-                    }
-                }.apply { isDaemon = true }.start()
-            }, 300)
         } else mainHandler.postDelayed({
             // v2.2.1：免投屏模式没有投影会话，也要走"点亮+搬运"（否则黑屏卡在主屏）
             if (projection == null && !noProjection) return@postDelayed
@@ -481,6 +464,21 @@ class MirrorService : Service() {
             Bridge.stop()
         } catch (_: Throwable) {
         }
+        // v2.4.2：释放按屏常亮锁 + 恢复背屏电源策略（参考实现同款收尾）
+        val rid = rearDispId
+        if (rid > 0) {
+            injectorInstance?.let { ii ->
+                try {
+                    ii.exec("cmd display power-reset $rid")
+                } catch (_: Throwable) {
+                }
+                try {
+                    ii.exec("cmd power set-wakelock release -d $rid SCREEN_BRIGHT_WAKE_LOCK")
+                } catch (_: Throwable) {
+                }
+            }
+            rearDispId = -1
+        }
         removeKeepAlive()
         try {
             evdev?.stop()
@@ -507,8 +505,54 @@ class MirrorService : Service() {
         mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
 
-// v2.4.1：背屏常亮窗口（透明 overlay + FLAG_KEEP_SCREEN_ON，挂在背屏 display 上）
+// v2.4.2：背屏常亮窗口（透明 overlay + FLAG_KEEP_SCREEN_ON，挂在背屏 display 上）
     private var keepAliveView: android.view.View? = null
+
+    @Volatile
+    private var rearDispId = -1
+
+    /**
+     * v2.4.2 背屏激活与常亮（完整照抄参考实现的两段命令，均已实测可用）：
+     *   cmd power set-wakelock acquire -d <id> SCREEN_BRIGHT_WAKE_LOCK   ← 按屏常亮锁
+     *   cmd power wakeup --display-id <id>                              ← 按屏唤醒
+     * 仍未 ON 时回退 MIUI 电源事务兜底；结束时 set-wakelock release + power-reset 恢复。
+     */
+    private fun activateRear(inj: Injector, displayId: Int) {
+        Thread {
+            try {
+                val l1 = inj.exec("cmd power set-wakelock acquire -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
+                val l2 = inj.exec("cmd power wakeup --display-id $displayId")
+                Diag.log(
+                    "背屏激活: 常亮锁=${l1.ifBlank { "OK(无输出)" }} " +
+                        "唤醒=${l2.ifBlank { "OK(无输出)" }}"
+                )
+                val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+                for (i in 1..6) {
+                    val st = dm.getDisplay(displayId)?.state
+                    if (st == android.view.Display.STATE_ON) {
+                        Diag.log("背屏已激活 state=$st")
+                        break
+                    }
+                    val wake = inj.exec(
+                        "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                            "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                    )
+                    Diag.log("背屏激活(事务兜底#$i): state=$st ${wake.take(40)}")
+                    try {
+                        Thread.sleep(1000)
+                    } catch (_: Throwable) {
+                    }
+                }
+                val list = inj.exec("cmd power set-wakelock list")
+                val held = list.contains("Display $displayId") &&
+                    list.contains("SCREEN_BRIGHT_WAKE_LOCK") &&
+                    list.contains("held=true")
+                Diag.log("背屏常亮锁验证: ${if (held) "held=true ✓" else "未持锁（见上文输出）"}")
+            } catch (t: Throwable) {
+                Diag.log("背屏激活异常: $t")
+            }
+        }.apply { isDaemon = true; name = "rear-activate"; start() }
+    }
 
     private fun showKeepAlive(displayId: Int) {
         if (keepAliveView != null) return
