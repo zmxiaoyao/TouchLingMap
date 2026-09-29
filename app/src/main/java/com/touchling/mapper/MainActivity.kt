@@ -525,7 +525,9 @@ class MainActivity : Activity() {
             val e = t.lastIndexOf("```")
             if (e >= 0) t = t.substring(0, e)
         }
-        val h = t.indexOf("<!DOCTYPE", true).let { if (it >= 0) it else t.indexOf("<html", true) }
+        val h1 = t.indexOf("<!DOCTYPE", 0, true)
+        val h2 = t.indexOf("<html", 0, true)
+        val h = if (h1 >= 0) h1 else h2
         if (h > 0) t = t.substring(h)
         return t.trim()
     }
