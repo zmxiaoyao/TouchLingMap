@@ -96,6 +96,73 @@ class MainActivity : Activity() {
             setOnClickListener { click() }
         }
 
+    /** 当前 App 版本号（跟随打包版本，不再手写） */
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (_: Throwable) {
+        "?"
+    }
+
+    /** 单选行（把 int 选项存进 prefs） */
+    private fun optionRow(key: String, def: Int, labels: List<String>): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val btns = mutableListOf<Button>()
+        fun paint() {
+            val cur = sp.getInt(key, def)
+            btns.forEachIndexed { i, b ->
+                b.background = GradientDrawable().apply {
+                    cornerRadius = dp(10f).toFloat()
+                    setColor(if (i == cur) 0xFF111827.toInt() else 0xFFEDEEF2.toInt())
+                }
+                b.setTextColor(if (i == cur) Color.WHITE else 0xFF374151.toInt())
+            }
+        }
+        labels.forEachIndexed { i, label ->
+            val b = Button(this).apply {
+                text = label
+                textSize = 13f
+                isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ).apply { rightMargin = dp(6f) }
+                setOnClickListener {
+                    sp.edit().putInt(key, i).apply()
+                    paint()
+                    persistCfg()
+                }
+            }
+            btns.add(b)
+            row.addView(b)
+        }
+        paint()
+        return row
+    }
+
+    /** 开关行（bool 选项） */
+    private fun switchRow(label: String, key: String, def: Boolean = false): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4f), 0, dp(4f))
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(0xFF374151.toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            )
+        })
+        row.addView(android.widget.Switch(this).apply {
+            isChecked = sp.getBoolean(key, def)
+            setOnCheckedChangeListener { _, v ->
+                sp.edit().putBoolean(key, v).apply()
+                persistCfg()
+            }
+        })
+        return row
+    }
+
     // ---------- 界面 ----------
 
     private fun buildUi() {
@@ -115,7 +182,7 @@ class MainActivity : Activity() {
             setPadding(0, dp(6f), 0, dp(2f))
         })
         root.addView(TextView(this).apply {
-            text = "小米背屏 → 主屏 · 映射控制台 v0.4.0"
+            text = "小米背屏 → 主屏 · 映射控制台 v${appVersion()}"
             textSize = 13f
             setTextColor(0xFF8E8E93.toInt())
             setPadding(0, 0, 0, dp(16f))
@@ -156,6 +223,28 @@ class MainActivity : Activity() {
             }
         })
         root.addView(actionCard)
+
+        // 样式 / 主题卡（v0.6.0）
+        val styleCard = card()
+        styleCard.addView(sectionTitle("光标样式"))
+        styleCard.addView(optionRow("cursorStyle", 0, listOf("圆点", "十字", "箭头", "方框")))
+        styleCard.addView(sectionTitle("光标颜色"))
+        val colorRow = optionRow("cursorColor", 0, listOf("蓝", "白", "红", "绿", "黄"))
+        styleCard.addView(colorRow)
+        styleCard.addView(sectionTitle("光标大小"))
+        styleCard.addView(optionRow("cursorSizeIdx", 1, listOf("小", "中", "大")))
+        styleCard.addView(sectionTitle("背屏显示样式"))
+        styleCard.addView(optionRow("rearBg", 0, listOf("镜像", "纯黑", "网格")))
+        styleCard.addView(sectionTitle("方向反转（触控板 / 体感）"))
+        styleCard.addView(switchRow("左右反转", "invX"))
+        styleCard.addView(switchRow("上下反转", "invY"))
+        styleCard.addView(TextView(this).apply {
+            text = "※ 样式改动在下次「开始映射」时生效"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(8f), 0, 0)
+        })
+        root.addView(styleCard)
 
         // 注入通道
         val channelCard = card()
