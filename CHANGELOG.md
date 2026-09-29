@@ -2,6 +2,18 @@
 
 本项目版本记录。最新版本请见 [Releases](https://github.com/zmxiaoyao/TouchLingMap/releases)。
 
+## v2.4.1
+### 🐛 修复
+- **独占背屏触摸"没用"（根因定位）**：v2.4.0 把 grab 工具部署到 app 私有 `filesDir`（权限 0700，shell 进不去）→ 进程秒退无输出（日志：`独占失败: 无响应`）
+  - 改为与参考实现同款路径：**jniLibs `libgrab.so` → nativeLibraryDir（0755，shell 可执行）**，CI 编译输出已改
+  - 新增 `packaging.jniLibs.useLegacyPackaging = true` 确保安装时解压可执行
+- **必须手动点亮背屏才能滑动（根因定位）**：日志显示首次点亮事务常把 `DOZE→OFF`，要打 2~3 次、间隔 5s 才 ON（启动后 10 秒才可用）
+  - 启动改为**密集点亮循环**（最多 8 次、每秒一次，直到 `state=ON` 才停）
+  - 新增**背屏常亮窗口**：透明 overlay（FLAG_KEEP_SCREEN_ON）挂在背屏 display 上，映射期间保持常亮，停止即移除（需悬浮窗权限）
+
+### ✨ 变更
+- **下线「手势映射」模式**：移除模式选项与手势参数页；历史 `gesture` 配置自动迁移回「灵触映射」（底层识别代码保留，随时可回归）
+
 ## v2.4.0
 ### ✨ 丝滑：实时触控桥
 - 新增 `TouchBridge`（app_process 常驻注入进程）：通过 Shizuku/Root 启动，直连 `IInputManager.injectInputEvent`
