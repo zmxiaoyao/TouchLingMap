@@ -185,8 +185,11 @@ class MainActivity : Activity() {
 
     // ---------- 界面 ----------
 
-    private val AI_SYS = "你是背屏主题生成器。用户会描述想要的主题，你要输出一个完整的单文件 HTML（内联 CSS/JS），" +
-            "适配 976x596 的副屏，深色背景、触摸交互友好、不要外部资源。" +
+    private val AI_SYS = "你是背屏主题生成器。用户会描述想要的主题，你要输出一个完整的单文件 HTML（内联 CSS/JS）。" +
+            "【尺寸硬性要求】适配 976x596 的副屏：html/body 必须是 width:100%;height:100%;margin:0;padding:0;overflow:hidden；" +
+            "所有尺寸用相对单位（%/vw/vh/flex），禁止写死大像素宽度（如 width:1200px）；内容必须完全在一屏内、不出现滚动条；" +
+            "字体大小控制在 14~90px 之间，布局优先用 flex 居中。" +
+            "深色背景、触摸交互友好、不要引用任何外部资源（图片用 emoji 或 CSS 绘制）。" +
             "只输出 HTML 源码本身，不要 markdown 代码块，不要任何解释文字。" +
             "页面中可用全局对象 TouchLing 调用原生能力：TouchLing.log(msg)、TouchLing.key(code)（3=主页 4=返回 187=多任务）、TouchLing.exec(cmd)。"
 
@@ -838,7 +841,16 @@ class MainActivity : Activity() {
             putExtra("noProjection", true)
         }
         startForegroundService(i)
-        Toast.makeText(this, "正在把内容显示到背屏…", Toast.LENGTH_SHORT).show()
+        val shellOk = Injector.rootAvailable() || shizukuState() == "已授权"
+        if (shellOk) {
+            Toast.makeText(this, "正在把内容显示到背屏…（看背屏）", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(
+                this,
+                "已请求上屏，但搬运任务需要 shell 权限：请先授权 Shizuku（或 Root）",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun startProjection() {
