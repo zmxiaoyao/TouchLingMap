@@ -2,6 +2,24 @@
 
 本项目版本记录。最新版本请见 [Releases](https://github.com/zmxiaoyao/TouchLingMap/releases)。
 
+## v2.4.7
+### ✨ 激活顺序 1:1 照抄参考实现（本次核心）
+核对其源码 `m0.java` 原文，激活顺序是【**①先持常亮锁 → ②再唤醒**】：
+```
+cmd power set-wakelock acquire -d <id> SCREEN_BRIGHT_WAKE_LOCK   ← ①先摆好"常亮"声明
+cmd power wakeup --display-id <id>                                ← ②再唤醒
+```
+此前我们是反的（先唤醒再持锁）→ 唤醒后系统还没看到"常亮"意图 → 回睡 → 反复打 2~3 次、要 10 秒。现在**先锁后唤，一次到位**（对应"先激活再常亮"的观感）。
+
+### ✨ 兜底组件 1:1 照抄：`PowerBridge`（移植自 RearPowerBridge）
+- set-wakelock 命令不可用的设备 → 自动启动 **app_process 电源桥**：
+  `PowerManager.newWakeLock(10, tag, displayId).acquire()` → 未亮时 `wakeUp(now, 2, tag, displayId)`（隐藏 per-display 重载）→ 输出 `MM_POWER_READY` 后保活持锁
+- 停止时关闭 stdin → 进程退出自动释放锁
+- 日志自证：`背屏激活[1/3] 常亮锁` → `[2/3] 唤醒` → `[3/3] 已点亮 state=2`
+
+### 🐛 看门狗同步为新顺序
+背屏再灭时：①续常亮锁 → ②唤醒 → ③事务兜底
+
 ## v2.4.6
 ### 🐛 三个关键修复（对照日志实锤）
 - **体感光标"还是没反应"（v2.4.5 引入）**：日志实锤 `evdev: 体感光标模式…` 之后没有 `evdev 直读已启动` / `体感光标已启动` —— 该分支只打印日志却**拦截了控制流**（gyro 未进入 else 分支，evdev 与陀螺仪都没启动）
