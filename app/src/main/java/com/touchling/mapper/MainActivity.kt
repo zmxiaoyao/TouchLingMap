@@ -51,6 +51,16 @@ class MainActivity : Activity() {
     private lateinit var swNoMirror: android.widget.Switch
     private lateinit var tvRearDev: TextView
     private lateinit var rearDevBox: LinearLayout
+    // v2.2.2 开始/停止一键切换
+    private var btnStart: Button? = null
+    private var lastStartClick = 0L
+    private val uiTick = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            refreshStatus()
+            uiTick.postDelayed(this, 1000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +81,8 @@ class MainActivity : Activity() {
         refreshRearDevices()
         updateSummary()
         refreshThemeList()
+        uiTick.removeCallbacks(tick)
+        uiTick.post(tick)
     }
 
     /** v2.2.0：选择「自动启停」白名单应用 */
@@ -149,6 +161,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        uiTick.removeCallbacks(tick)
         persistCfg()
     }
 
@@ -317,11 +330,22 @@ class MainActivity : Activity() {
         swNoMirror = android.widget.Switch(this).apply {
             text = "免投屏触控（背屏黑屏当触控板 · 不申请屏幕权限）"
             textSize = 14f
-            isChecked = sp.getBoolean("noMirror", false)
+            isChecked = sp.getBoolean("noMirror", true)
             setOnCheckedChangeListener { _, v -> sp.edit().putBoolean("noMirror", v).apply() }
         }
         actionCard.addView(swNoMirror)
-        actionCard.addView(bigButton("开始映射", 0xFF34C759.toInt()) { startProjection() })
+        btnStart = bigButton("▶ 开始映射", 0xFF34C759.toInt()) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastStartClick < 1200) return@bigButton
+            lastStartClick = now
+            if (MirrorService.running) {
+                MirrorService.stop(this)
+                Toast.makeText(this, "已请求停止映射", Toast.LENGTH_SHORT).show()
+            } else {
+                startProjection()
+            }
+        }
+        actionCard.addView(btnStart!!)
         actionCard.addView(bigButton("停止映射", 0xFF8E8E93.toInt()) {
             MirrorService.stop(this)
             Toast.makeText(this, "已请求停止", Toast.LENGTH_SHORT).show()
@@ -422,36 +446,46 @@ class MainActivity : Activity() {
         // 🎮 手感页（v2.0.0，参数参考「妙妙背屏」）
         page5.addView(pageTitle("手感"))
         val handCard = card()
-        handCard.addView(sectionTitle("触控板速度" + fmt1(sp.getFloat("sens", 1f)) + "×"))
+        val tvSensL = sectionTitle("触控板速度")
         sbSens = SeekBar(this).apply {
             max = 250
             progress = ((sp.getFloat("sens", 1f) - 0.5f) * 100).toInt().coerceIn(0, 250)
         }
+        handCard.addView(tvSensL)
         handCard.addView(sbSens)
+        bindLabel(tvSensL, sbSens) { "触控板速度 ${fmt1(0.5f + it / 100f)}×" }
 
-        handCard.addView(sectionTitle("平滑（低通滤波）").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        val tvSmoothL = sectionTitle("平滑").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbSmooth = SeekBar(this).apply {
             max = 300
             progress = sp.getInt("smoothMs", 0).coerceIn(0, 300)
         }
+        handCard.addView(tvSmoothL)
         handCard.addView(sbSmooth)
+        bindLabel(tvSmoothL, sbSmooth) { "平滑（低通滤波）$it ms" }
 
-        handCard.addView(sectionTitle("陀螺仪死区 rad/s").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        val tvDeadL = sectionTitle("死区").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbDead = SeekBar(this).apply {
             max = 200
             progress = (sp.getFloat("deadZone", 0.02f) * 100).toInt().coerceIn(0, 200)
         }
+        handCard.addView(tvDeadL)
         handCard.addView(sbDead)
+        bindLabel(
+            tvDeadL, sbDead
+        ) { "陀螺仪死区 ${String.format(java.util.Locale.US, "%.2f", it / 100f)} rad/s" }
 
-        handCard.addView(sectionTitle("光标大小 dp").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        val tvCursorL = sectionTitle("光标大小").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbCursorDp = SeekBar(this).apply {
             max = 48
             progress = (sp.getInt("cursorDp", 26) - 16).coerceIn(0, 48)
         }
+        handCard.addView(tvCursorL)
         handCard.addView(sbCursorDp)
+        bindLabel(tvCursorL, sbCursorDp) { "光标大小 ${16 + it} dp" }
 
         handCard.addView(sectionTitle("方向反转").apply { setPadding(0, dp(12f), 0, dp(4f)) })
-        handCard.addView(switchRow("光标 X 反转", "invX"))
+        handCard.addView(switchRow("光标 X 反转", "invX", true))
         handCard.addView(switchRow("光标 Y 反转", "invY"))
 
         handCard.addView(sectionTitle("工具").apply { setPadding(0, dp(12f), 0, dp(4f)) })
@@ -505,14 +539,16 @@ class MainActivity : Activity() {
             }
         )
 
-        setCard.addView(sectionTitle("黑遮罩（防烧屏）").apply {
+        val tvMaskL = sectionTitle("黑遮罩（防烧屏）").apply {
             setPadding(0, dp(14f), 0, dp(10f))
-        })
+        }
         sbMask = SeekBar(this).apply {
             max = 80
             progress = sp.getInt("mask", 0)
         }
+        setCard.addView(tvMaskL)
         setCard.addView(sbMask)
+        bindLabel(tvMaskL, sbMask) { "黑遮罩（防烧屏）$it%" }
         page4.addView(setCard)
 
         // 特色功能
@@ -565,7 +601,7 @@ class MainActivity : Activity() {
         // v2.2.0 自动化与快捷
         val autoCard = card()
         autoCard.addView(sectionTitle("触摸输入源"))
-        autoCard.addView(optionRow("evdev", 0, listOf("背屏视图（默认）", "evdev 直读")))
+        autoCard.addView(optionRow("evdev", 1, listOf("背屏视图", "evdev 直读（推荐）")))
         autoCard.addView(TextView(this).apply {
             text = "※ evdev 直读：内核层读背屏触摸；镜像 / 免投屏 都可用，" +
                 "灵触映射 / 精密触控板 都支持（体感光标暂不支持）；背屏视图只做防误触"
@@ -705,6 +741,19 @@ class MainActivity : Activity() {
     // ---------- 分页 / 液态玻璃导航（v0.9.0） ----------
 
     /** v2.2.1 页面标题（排版统一） */
+    /** v2.2.2：滑条标题实时显示数值 */
+    private fun bindLabel(tv: TextView, bar: SeekBar, fmt: (Int) -> String) {
+        tv.text = fmt(bar.progress)
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, u: Boolean) {
+                tv.text = fmt(p)
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+    }
+
     private fun pageTitle(text: String): TextView = TextView(this).apply {
         this.text = text
         textSize = 20f
@@ -891,6 +940,8 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
+        // v2.2.2：按钮随运行状态切换 开始/停止
+        btnStart?.text = if (MirrorService.running) "⏹ 停止映射" else "▶ 开始映射"
         val root = if (Injector.rootAvailable()) "可用" else "不可用"
         tvStatus.text = "Shizuku：${shizukuState()} ｜ Root(su)：$root"
     }
@@ -1292,7 +1343,7 @@ class MainActivity : Activity() {
         }
         val channel = sp.getString("channel", "auto") ?: "auto"
         // v2.0.0：免投屏模式优先（不申请屏幕捕获权限）
-        if (sp.getBoolean("noMirror", false)) {
+        if (sp.getBoolean("noMirror", true)) {
             startNoMirror()
             return
         }
