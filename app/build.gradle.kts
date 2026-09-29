@@ -7,12 +7,19 @@ android {
     namespace = "com.touchling.mapper"
     compileSdk = 35
 
+    // v2.4.1：强制解压原生库到 nativeLibraryDir（libgrab.so 需要被 shell 执行）
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.touchling.mapper"
         minSdk = 31
         targetSdk = 34
-        versionCode = 25
-        versionName = "2.4.0"
+        versionCode = 26
+        versionName = "2.4.1"
     }
 
     signingConfigs {
