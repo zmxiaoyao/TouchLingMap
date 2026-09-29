@@ -23,7 +23,7 @@ class Cfg(
     val rearBg: Int,
     val toy: Int,
     val htmlTheme: Int,
-    // v2.0.0 免投屏触控 + 手感参数（参考妙妙背屏）
+    // v2.0.0 免投屏触控 + 手感参数
     val noMirror: Boolean,
     val smoothMs: Int,
     val deadZone: Float,
@@ -38,13 +38,16 @@ class Cfg(
     val autoApp: Boolean,
     val autoApps: String,
     val ballOn: Boolean,
-    // v2.3.0 手势映射参数（算法逆向自「妙妙背屏」）
+    // v2.3.0 手势映射参数
     val gThreshold: Float, // 识别阈值 0.05~0.35，默认 0.12
     val gSwipeLen: Float, // 滑动距离（占屏幕比例）0.15~0.75，默认 0.46
     val gSwipeMs: Int, // 滑动时长 120~650ms，默认 260
     val gTapX: Float, // 点击 X（归一化）默认 0.5
     val gTapY: Float, // 点击 Y（归一化）默认 0.5
-    val gInvert: Boolean // 手势上下反转（妙妙 invertSwipe）
+    val gInvert: Boolean, // 手势上下反转
+    // v2.4.0 手感对齐 + 独占背屏触摸
+    val capture: Boolean, // 独占背屏触摸（EVIOCGRAB 内核层拦截）
+    val padSens: Float // 触控板速度 0.3~3.0 默认 1.4
 ) {
     /** 平滑系数：把"平滑时间(ms)"换算成每帧插值比例 */
     val smoothFactor: Float
@@ -69,17 +72,21 @@ class Cfg(
             } catch (_: Throwable) { corrupted = true; d }
 
             val mode = s("mode", "direct")
+            // 平滑：smoothing（秒，默认 0.045）与旧 smoothMs（ms）兼容
+            val smoothSec = f("smoothing", -1f)
+            val smoothMsV =
+                if (smoothSec >= 0f) (smoothSec * 1000f + 0.5f).toInt() else i("smoothMs", 0)
             val cfg = Cfg(
                 mode,
-                f("sens", 1f),
+                // v2.4.0 手感参数：key/范围/默认值与主流触控方案完全一致
+                f("sensitivity", 1.5f),
                 i("mask", 0),
                 s("channel", "auto"),
                 // v2.1.0：模式=体感光标 时强制开启体感
                 b("gyro", false) || mode == "gyro",
                 b("scroll2", true),
-                // v2.2.2：默认值对齐「妙妙背屏」—— 免投屏 ON、evdev ON、X 反转 ON
-                b("invX", true),
-                b("invY", false),
+                b("invertX", false),
+                b("invertY", false),
                 i("cursorStyle", 2),
                 i("cursorSizeIdx", 1),
                 i("cursorColor", 0),
@@ -87,9 +94,9 @@ class Cfg(
                 i("toy", 0),
                 i("htmlTheme", 0),
                 b("noMirror", true),
-                i("smoothMs", 0),
-                f("deadZone", 0.02f),
-                i("cursorDp", 26),
+                smoothMsV,
+                f("deadzone", 0.018f),
+                i("cursorSize", 32),
                 i("rearRot", 0),
                 f("gyroCalX", 0f),
                 f("gyroCalY", 0f),
@@ -99,13 +106,15 @@ class Cfg(
                 b("autoApp", false),
                 s("autoApps", ""),
                 b("ballOn", false),
-                // v2.3.0 手势参数（默认值 = 妙妙官方默认）
-                f("gThreshold", 0.12f),
-                f("gSwipeLen", 0.46f),
-                i("gSwipeMs", 260),
-                f("gTapX", 0.5f),
-                f("gTapY", 0.5f),
-                b("gInvert", false)
+                // v2.4.0 手势参数（默认值 = 主流方案默认）
+                f("threshold", 0.12f),
+                f("swipeLength", 0.46f),
+                i("swipeMs", 260),
+                f("tapX", 0.5f),
+                f("tapY", 0.5f),
+                b("invertSwipe", false),
+                b("capture", true),
+                f("touchpad", 1.4f)
             )
             if (corrupted) Diag.log("Cfg.load: 存在类型损坏的配置项，已回退默认值")
             return cfg
@@ -164,16 +173,16 @@ class TouchMapper(
         return when (cfg.mode) {
             "gyro" -> false
             "pad" -> pad(e, view)
-            "gesture" -> gesture(e, view) // v2.3.0 手势映射（妙妙同款）
+            "gesture" -> gesture(e, view) // v2.3.0 手势映射
             else -> direct(e, view)
         }
     }
 
-    // ================= v2.3.0 手势映射（逆向自妙妙背屏 l2/x + p2/p） =================
+    // ================= v2.3.0 手势映射 =================
     // 识别：DOWN 记起点 → MOVE 记最大位移 hypot（归一化）→ UP 判定
     //   位移 >= threshold → 滑动手势（主轴定方向）→ 注入系统级 input -d 0 swipe（中心±swipeLen/2, swipeMs）
     //   否则短按 → input -d 0 tap（tapX, tapY）；长按(>=700ms) → 同点长 swipe
-    // 注入带冷却（上一手势执行中忽略新手势）——妙妙 f1075s 同款防重入
+    // 注入带冷却（上一手势执行中忽略新手势）（冷却期防重入）
     private var gDown = false
     private var gSX = 0f
     private var gSY = 0f
@@ -238,7 +247,7 @@ class TouchMapper(
 
     private fun null2(): Boolean = true
 
-    /** 注入系统级滑动：起点/终点 = 主屏中心 ± swipeLen/2（clamp 到 6%~94% 屏内，妙妙同款） */
+    /** 注入系统级滑动：起点/终点 = 主屏中心 ± swipeLen/2（clamp 到 6%~94% 屏内） */
     private fun injectSwipe(dir: String) {
         val w = mainW.toFloat()
         val h = mainH.toFloat()
@@ -281,8 +290,10 @@ class TouchMapper(
         } else if (rot == 270) {
             val t = nx; nx = ny; ny = 1f - t
         }
-        val x = (nx * mainW).coerceIn(0f, mainW - 1f)
-        val y = (ny * mainH).coerceIn(0f, mainH - 1f)
+        // 灵敏度（0.2~4.0，默认 1.5 → 缩放系数 1.0，围绕屏幕中心缩放有效区）
+        val k = cfg.sens / 1.5f
+        val x = ((nx - 0.5f) * mainW * k + mainW * 0.5f).coerceIn(0f, mainW - 1f)
+        val y = ((ny - 0.5f) * mainH * k + mainH * 0.5f).coerceIn(0f, mainH - 1f)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastSendX = x; lastSendY = y; lastSendT = now()
@@ -325,13 +336,13 @@ class TouchMapper(
                     view.removeCallbacks(longPressRunnable)
                 }
                 if (dragging) {
-                    dragX = (dragX + dx * cfg.sens).coerceIn(0f, mainW - 1f)
-                    dragY = (dragY + dy * cfg.sens).coerceIn(0f, mainH - 1f)
+                    dragX = (dragX + dx * cfg.padSens).coerceIn(0f, mainW - 1f)
+                    dragY = (dragY + dy * cfg.padSens).coerceIn(0f, mainH - 1f)
                     injector.move(dragX, dragY)
                     cx = dragX; cy = dragY
                 } else if (moved) {
-                    cx = (cx + dx * cfg.sens).coerceIn(0f, mainW - 1f)
-                    cy = (cy + dy * cfg.sens).coerceIn(0f, mainH - 1f)
+                    cx = (cx + dx * cfg.padSens).coerceIn(0f, mainW - 1f)
+                    cy = (cy + dy * cfg.padSens).coerceIn(0f, mainH - 1f)
                 }
                 onCursor(cx, cy, true)
             }
