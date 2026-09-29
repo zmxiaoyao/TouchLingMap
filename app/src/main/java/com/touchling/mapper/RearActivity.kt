@@ -67,10 +67,19 @@ class RearActivity : Activity() {
 
     // v2.2.2：服务停止后自动退出，防止黑屏窗口残留在背屏/主屏
     private val uiH = android.os.Handler(android.os.Looper.getMainLooper())
+    private val createT = android.os.SystemClock.uptimeMillis()
     private val stopPoll = object : Runnable {
         override fun run() {
             if (!MirrorService.running) {
                 Diag.log("服务已停止 → 背屏自动退出（防黑屏残留）")
+                finish()
+                return
+            }
+            // v2.3.0：10s 仍未抵达背屏（卡在主屏）→ 主动退出，防主屏黑块
+            if (!arrived && display?.displayId == 0 &&
+                android.os.SystemClock.uptimeMillis() - createT > 10_000
+            ) {
+                Diag.log("10s 未抵达背屏 → 自动退出（防主屏黑块）")
                 finish()
                 return
             }
