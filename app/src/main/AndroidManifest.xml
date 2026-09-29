@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- v0.8.0：AI 生成 HTML 主题需要联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- v1.2.0：只上屏模式的前台服务类型（Android 14 必须声明有效类型） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:label="触灵映射"
@@ -26,9 +28,13 @@
         </activity>
 
         <service
-            android:name=".MirrorService"
+                android:name=".MirrorService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="back screen theme/toy display" />
+        </service>
 
         <!-- 背屏镜像 Activity（由服务用 am start 加 display 参数拉到背屏） -->
         <activity
