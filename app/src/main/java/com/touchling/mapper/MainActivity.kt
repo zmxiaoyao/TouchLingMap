@@ -285,6 +285,7 @@ class MainActivity : Activity() {
         val page5 = pageContainer(pad) // v2.0.0 手感
 
         // 状态卡
+        page1.addView(pageTitle("控制"))
         val statusCard = card()
         tvStatus = TextView(this).apply {
             textSize = 15f
@@ -352,9 +353,11 @@ class MainActivity : Activity() {
             setTextColor(0xFF9CA3AF.toInt())
             setPadding(0, dp(8f), 0, 0)
         })
+        page4.addView(pageTitle("设置"))
         page4.addView(styleCard)
 
         // AI 主题工坊（v0.8.0）：用 AI 生成 HTML 主题，背屏用 WebView 渲染
+        page3.addView(pageTitle("AI 工坊"))
         val aiCard = card()
         aiCard.addView(sectionTitle("AI 主题工坊（HTML）"))
         etPrompt = EditText(this).apply {
@@ -393,6 +396,7 @@ class MainActivity : Activity() {
         page3.addView(aiCard)
 
         // 背屏内容卡（v1.0.0）：显示什么 + 一键只上屏（不开启触摸映射）
+        page2.addView(pageTitle("背屏内容"))
         val contentCard = card()
         contentCard.addView(sectionTitle("背屏显示什么（HTML 主题）"))
         contentCard.addView(
@@ -416,6 +420,7 @@ class MainActivity : Activity() {
         page2.addView(contentCard)
 
         // 🎮 手感页（v2.0.0，参数参考「妙妙背屏」）
+        page5.addView(pageTitle("手感"))
         val handCard = card()
         handCard.addView(sectionTitle("触控板速度" + fmt1(sp.getFloat("sens", 1f)) + "×"))
         sbSens = SeekBar(this).apply {
@@ -562,7 +567,8 @@ class MainActivity : Activity() {
         autoCard.addView(sectionTitle("触摸输入源"))
         autoCard.addView(optionRow("evdev", 0, listOf("背屏视图（默认）", "evdev 直读")))
         autoCard.addView(TextView(this).apply {
-            text = "※ evdev 直读：内核层读背屏触摸（需「免投屏触控」+「精密触控板」），背屏视图只做防误触"
+            text = "※ evdev 直读：内核层读背屏触摸；镜像 / 免投屏 都可用，" +
+                "灵触映射 / 精密触控板 都支持（体感光标暂不支持）；背屏视图只做防误触"
             textSize = 11f
             setTextColor(0xFF9CA3AF.toInt())
         })
@@ -697,6 +703,15 @@ class MainActivity : Activity() {
     }
 
     // ---------- 分页 / 液态玻璃导航（v0.9.0） ----------
+
+    /** v2.2.1 页面标题（排版统一） */
+    private fun pageTitle(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 20f
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        setTextColor(0xFF111827.toInt())
+        setPadding(0, dp(2f), 0, dp(10f))
+    }
 
     private fun pageContainer(pad: Int): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
