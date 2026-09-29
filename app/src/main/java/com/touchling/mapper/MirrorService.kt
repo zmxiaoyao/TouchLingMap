@@ -263,6 +263,7 @@ class MirrorService : Service() {
         if (ready) {
             val useRoot = inj is RootInjector ||
                 (cfg.channel != "shizuku" && Injector.rootAvailable())
+            bridgeUseRoot = useRoot
             Bridge.start(useRoot, applicationInfo.sourceDir)
         }
 
@@ -427,13 +428,13 @@ class MirrorService : Service() {
                         val asleep = st == Display.STATE_OFF || st == Display.STATE_DOZE ||
                                 st == Display.STATE_DOZE_SUSPEND || st == Display.STATE_UNKNOWN
                         if (asleep) {
-                            // v2.4.3：全套重激活（事务唤醒 + 常亮锁续持 + wakeup），不再只打事务
+                            // v2.4.7：照抄顺序 —— ①先续常亮锁 ②再唤醒 ③事务兜底
+                            acquireWakelockIfNeeded(inj, dispId)
+                            inj.exec("cmd power wakeup --display-id $dispId")
                             val w = inj.exec(
                                 "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                                     "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                             )
-                            acquireWakelockIfNeeded(inj, dispId)
-                            inj.exec("cmd power wakeup --display-id $dispId")
                             Diag.log("看门狗重激活背屏: ${w.ifBlank { "OK" }}")
                         }
                         // 任务被退回主屏 → 重新搬运（仅在有内容需要在背屏时）
@@ -476,6 +477,10 @@ class MirrorService : Service() {
         watchdog = null
         try {
             Bridge.stop()
+        } catch (_: Throwable) {
+        }
+        try {
+            Bridge.stopPower()
         } catch (_: Throwable) {
         }
         // v2.4.5：释放按屏常亮锁（循环释放至 held=false，修复 refCount 累积导致"停止后背屏仍常亮"）
@@ -526,6 +531,9 @@ class MirrorService : Service() {
 
     @Volatile
     private var rearDispId = -1
+
+    @Volatile
+    private var bridgeUseRoot = false
 
     /**
      * v2.4.2 背屏激活与常亮（完整照抄参考实现的两段命令，均已实测可用）：
@@ -638,30 +646,32 @@ class MirrorService : Service() {
     private fun activateRear(inj: Injector, displayId: Int) {
         Thread {
             try {
-                // v2.4.3 顺序调整：事务唤醒先行（实测它是唯一能快速脱离 DOZE_SUSPEND 的手段），
-                // 随后按屏常亮锁 + wakeup（参考实现同款），保持靠 KEEP_SCREEN_ON 窗口 + 锁双开
-                val wake0 = inj.exec(
-                    "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
-                        "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
-                )
+                // v2.4.7：1:1 照抄参考实现 m0.a() 的顺序 —— ①先持"常亮锁" ②再唤醒
+                // （先摆好"这块屏要一直亮"的声明再唤醒，避免"唤醒→回睡→再唤醒"的震荡；
+                //   此前顺序相反，才出现要打 2~3 次、启动 10 秒才可用的问题）
                 val l1 = acquireWakelockIfNeeded(inj, displayId)
                 val l2 = inj.exec("cmd power wakeup --display-id $displayId")
-                Diag.log(
-                    "背屏激活: 事务=${wake0.take(24)} 常亮锁=${l1.ifBlank { "OK(无输出)" }} " +
-                        "唤醒=${l2.ifBlank { "OK(无输出)" }}"
-                )
+                Diag.log("背屏激活[1/3] 常亮锁: ${l1.ifBlank { "OK(无输出)" }}")
+                Diag.log("背屏激活[2/3] 唤醒: ${l2.ifBlank { "OK(无输出)" }}")
+                // 兜底：set-wakelock 命令不可用时，启动参考实现同款电源桥（app_process 持锁+唤醒）
+                if (l1.contains("错误") || l1.contains("Error") || l1.contains("Unknown") ||
+                    l1.contains("Exception")
+                ) {
+                    val pbOk = Bridge.startPower(bridgeUseRoot, applicationInfo.sourceDir, displayId)
+                    Diag.log("背屏电源桥(兜底): ${if (pbOk) "已就绪（per-display WakeLock+wakeUp）" else "启动失败"}")
+                }
                 val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
                 for (i in 1..12) {
                     val st = dm.getDisplay(displayId)?.state
                     if (st == android.view.Display.STATE_ON) {
-                        Diag.log("背屏已激活 state=$st (第${i}次检查)")
+                        Diag.log("背屏激活[3/3] 已点亮 state=$st (第${i}次检查)")
                         break
                     }
                     val wake = inj.exec(
                         "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                             "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                     )
-                    Diag.log("背屏激活(兜底#$i): state=$st ${wake.take(32)}")
+                    Diag.log("背屏激活[3/3] 兜底#$i: state=$st ${wake.take(32)}")
                     try {
                         Thread.sleep(500)
                     } catch (_: Throwable) {
@@ -671,7 +681,13 @@ class MirrorService : Service() {
                 val held = list.contains("Display $displayId") &&
                     list.contains("SCREEN_BRIGHT_WAKE_LOCK") &&
                     list.contains("held=true")
-                Diag.log("背屏常亮锁验证: ${if (held) "held=true ✓" else "未持锁（见上文输出）"}")
+                Diag.log(
+                    "背屏常亮验证: " + when {
+                        held -> "命令锁 held=true ✓"
+                        Bridge.powerOk -> "电源桥运行中（锁由进程持有）"
+                        else -> "未持锁（见上文输出）"
+                    }
+                )
             } catch (t: Throwable) {
                 Diag.log("背屏激活异常: $t")
             }
