@@ -282,21 +282,29 @@ class MirrorService : Service() {
 
         // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块）
         val dispId = back.displayId
+        // v2.4.1：背屏常亮窗口（保持 digitizer 唤醒，无需手动点亮）
+        showKeepAlive(dispId)
         val pureTouch =
             noProjection && cfg.evdev && !displayOnly && cfg.htmlTheme == 0 && cfg.toy == 0
         if (pureTouch) {
             Diag.log("纯触控（免投屏+evdev）：跳过背屏 Activity 与搬运 → 主屏无黑窗")
             mainHandler.postDelayed({
                 Thread {
-                    try {
-                        Thread.sleep(150)
-                    } catch (_: Throwable) {
+                    // v2.4.1：密集点亮直到背屏真正 ON（实测首次事务常把 DOZE→OFF，要打 2~3 次）
+                    val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+                    for (i in 1..8) {
+                        val wake = inj.exec(
+                            "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                                "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                        )
+                        val st = dm.getDisplay(dispId)?.state
+                        Diag.log("点亮背屏(纯触控#$i): state=$st ${wake.ifBlank { "无输出" }}")
+                        if (st == android.view.Display.STATE_ON) break
+                        try {
+                            Thread.sleep(1000)
+                        } catch (_: Throwable) {
+                        }
                     }
-                    val wake = inj.exec(
-                        "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
-                            "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
-                    )
-                    Diag.log("点亮背屏(纯触控): ${wake.ifBlank { "无输出" }}")
                 }.apply { isDaemon = true }.start()
             }, 300)
         } else mainHandler.postDelayed({
@@ -473,6 +481,7 @@ class MirrorService : Service() {
             Bridge.stop()
         } catch (_: Throwable) {
         }
+        removeKeepAlive()
         try {
             evdev?.stop()
         } catch (_: Throwable) {
@@ -498,22 +507,70 @@ class MirrorService : Service() {
         mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
 
-    /**
-     * v2.4.0：部署「独占背屏触摸」工具（assets/grab → filesDir/native/grab）。
-     * 返回可执行路径；assets 缺失（本地未编译）或失败时返回 null → 回退 getevent 监听。
+// v2.4.1：背屏常亮窗口（透明 overlay + FLAG_KEEP_SCREEN_ON，挂在背屏 display 上）
+    private var keepAliveView: android.view.View? = null
+
+    private fun showKeepAlive(displayId: Int) {
+        if (keepAliveView != null) return
+        try {
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                Diag.log("背屏常亮窗口跳过：无悬浮窗权限（授予后背屏可自动保持常亮）")
+                return
+            }
+            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+            val disp = dm.getDisplay(displayId)
+            if (disp == null) {
+                Diag.log("背屏常亮窗口跳过：display $displayId 不存在")
+                return
+            }
+            val ctx = createWindowContext(
+                disp, android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null
+            )
+            val v = android.view.View(ctx)
+            val lp = android.view.WindowManager.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                android.graphics.PixelFormat.TRANSLUCENT
+            )
+            ctx.getSystemService(android.view.WindowManager::class.java).addView(v, lp)
+            keepAliveView = v
+            Diag.log("背屏常亮窗口已挂载 display=$displayId（KEEP_SCREEN_ON）")
+        } catch (t: Throwable) {
+            Diag.log("背屏常亮窗口失败: $t")
+        }
+    }
+
+    private fun removeKeepAlive() {
+        val v = keepAliveView ?: return
+        keepAliveView = null
+        try {
+            v.context.getSystemService(android.view.WindowManager::class.java).removeView(v)
+            Diag.log("背屏常亮窗口已移除")
+        } catch (t: Throwable) {
+            Diag.log("常亮窗口移除失败: $t")
+        }
+    }
+
+    /** v2.4.1：部署「独占背屏触摸」工具。
+     * 真身打包为 jniLibs `libgrab.so`，安装时系统解压到 nativeLibraryDir（0755，
+     * shell 可执行）—— 与 app 私有 filesDir（0700，shell 进不去）不同。
+     * 缺失或不可执行时返回 null → 回退 getevent 监听。
      */
     private fun deployGrab(): String? = try {
-        val f = java.io.File(filesDir, "native/grab")
-        if (!f.exists() || f.length() == 0L) {
-            f.parentFile?.mkdirs()
-            assets.open("grab").use { ins ->
-                java.io.FileOutputStream(f).use { outs -> ins.copyTo(outs) }
-            }
+        val f = java.io.File(applicationInfo.nativeLibraryDir, "libgrab.so")
+        if (f.exists() && f.canExecute()) {
+            f.absolutePath
+        } else {
+            Diag.log("独占工具缺失或不可执行: ${f.absolutePath} exists=${f.exists()}")
+            null
         }
-        f.setExecutable(true, false)
-        if (f.canExecute()) f.absolutePath else null
     } catch (t: Throwable) {
-        Diag.log("独占工具部署失败（回退 getevent 监听）: $t")
+        Diag.log("独占工具定位失败（回退 getevent 监听）: $t")
         null
     }
 
