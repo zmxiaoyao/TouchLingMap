@@ -416,11 +416,14 @@ class MirrorService : Service() {
                         val asleep = st == Display.STATE_OFF || st == Display.STATE_DOZE ||
                                 st == Display.STATE_DOZE_SUSPEND || st == Display.STATE_UNKNOWN
                         if (asleep) {
+                            // v2.4.3：全套重激活（事务唤醒 + 常亮锁续持 + wakeup），不再只打事务
                             val w = inj.exec(
                                 "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                                     "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                             )
-                            Diag.log("看门狗点亮背屏: ${w.ifBlank { "OK" }}")
+                            inj.exec("cmd power set-wakelock acquire -d $dispId SCREEN_BRIGHT_WAKE_LOCK")
+                            inj.exec("cmd power wakeup --display-id $dispId")
+                            Diag.log("看门狗重激活背屏: ${w.ifBlank { "OK" }}")
                         }
                         // 任务被退回主屏 → 重新搬运（仅在有内容需要在背屏时）
                         val tid = RearActivity.lastTaskId
@@ -520,26 +523,32 @@ class MirrorService : Service() {
     private fun activateRear(inj: Injector, displayId: Int) {
         Thread {
             try {
+                // v2.4.3 顺序调整：事务唤醒先行（实测它是唯一能快速脱离 DOZE_SUSPEND 的手段），
+                // 随后按屏常亮锁 + wakeup（参考实现同款），保持靠 KEEP_SCREEN_ON 窗口 + 锁双开
+                val wake0 = inj.exec(
+                    "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                        "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                )
                 val l1 = inj.exec("cmd power set-wakelock acquire -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
                 val l2 = inj.exec("cmd power wakeup --display-id $displayId")
                 Diag.log(
-                    "背屏激活: 常亮锁=${l1.ifBlank { "OK(无输出)" }} " +
+                    "背屏激活: 事务=${wake0.take(24)} 常亮锁=${l1.ifBlank { "OK(无输出)" }} " +
                         "唤醒=${l2.ifBlank { "OK(无输出)" }}"
                 )
                 val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-                for (i in 1..6) {
+                for (i in 1..12) {
                     val st = dm.getDisplay(displayId)?.state
                     if (st == android.view.Display.STATE_ON) {
-                        Diag.log("背屏已激活 state=$st")
+                        Diag.log("背屏已激活 state=$st (第${i}次检查)")
                         break
                     }
                     val wake = inj.exec(
                         "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                             "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                     )
-                    Diag.log("背屏激活(事务兜底#$i): state=$st ${wake.take(40)}")
+                    Diag.log("背屏激活(兜底#$i): state=$st ${wake.take(32)}")
                     try {
-                        Thread.sleep(1000)
+                        Thread.sleep(500)
                     } catch (_: Throwable) {
                     }
                 }
