@@ -396,6 +396,8 @@ class MirrorService : Service() {
                     }, { gyroX to gyroY })
                     if (cfg.mode == "gyro") startGyroFeed(cfg)
                     evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
+                    // v2.4.8：启动前先清残留 grab（照抄参考实现"启动前先停旧"的防护），防 EBUSY
+                    killStrayGrab()
                     evdev?.start(
                         dev,
                         back.mode.physicalWidth * 100 - 1,
@@ -505,6 +507,7 @@ class MirrorService : Service() {
             evdev?.stop()
         } catch (_: Throwable) {
         }
+        killStrayGrab() // v2.4.8：停后清残留（照抄参考实现 stop 时 kill 旧进程）
         evdev = null
         // 收起主屏光标
         cursorSink = null
@@ -640,6 +643,19 @@ class MirrorService : Service() {
             "仍持锁（需检查 list 输出）"
         } catch (t: Throwable) {
             "错误: $t"
+        }
+    }
+
+    /** v2.4.8：强杀残留 grab 进程（照抄参考实现 stop 时的 kill 白名单校验逻辑），
+     *  防止快速重开时旧进程仍持有 EVIOCGRAB → 新 grab 撞 EBUSY。 */
+    private fun killStrayGrab() {
+        val ii = injectorInstance ?: return
+        try {
+            ii.exec(
+                "for p in /proc/[0-9]*; do c=\$(cat \$p/comm 2>/dev/null); " +
+                    "case \"\$c\" in libgrab.so|libgrab|grab) kill -9 \${p#/proc/} 2>/dev/null;; esac; done"
+            )
+        } catch (_: Throwable) {
         }
     }
 
