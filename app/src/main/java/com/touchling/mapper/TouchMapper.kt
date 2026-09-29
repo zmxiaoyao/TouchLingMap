@@ -165,7 +165,7 @@ class TouchMapper(
             dragging = true
             dragX = cx
             dragY = cy
-            injector.down(dragX, dragY)
+            emitDown(dragX, dragY)
             onCursor(cx, cy, true)
         }
     }
@@ -304,12 +304,14 @@ class TouchMapper(
             }
             MotionEvent.ACTION_MOVE -> {
                 val t = now()
-                if (hypot(x - lastSendX, y - lastSendY) >= 3f || t - lastSendT >= 40) {
-                    injector.move(x, y)
+                // v2.4.4：桥通道零 fork 开销 → 全帧率注入（16ms≈60fps）；仅回退 input 命令时保留节流。
+                // 抖音等对手势轨迹密度敏感的应用需要连续事件流
+                if (!Bridge.ok || hypot(x - lastSendX, y - lastSendY) >= 3f || t - lastSendT >= 16) {
+                    emitMove(x, y)
                     lastSendX = x; lastSendY = y; lastSendT = t
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> injector.up(x, y)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> emitUp(x, y)
         }
         return true
     }
@@ -341,7 +343,7 @@ class TouchMapper(
                 if (dragging) {
                     dragX = (dragX + dx * cfg.padSens).coerceIn(0f, mainW - 1f)
                     dragY = (dragY + dy * cfg.padSens).coerceIn(0f, mainH - 1f)
-                    injector.move(dragX, dragY)
+                    emitMove(dragX, dragY)
                     cx = dragX; cy = dragY
                 } else if (moved) {
                     cx = (cx + dx * cfg.padSens).coerceIn(0f, mainW - 1f)
@@ -352,7 +354,7 @@ class TouchMapper(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 view.removeCallbacks(longPressRunnable)
                 if (dragging) {
-                    injector.up(dragX, dragY)
+                    emitUp(dragX, dragY)
                     dragging = false
                 } else if (!moved) {
                     injector.tap(cx, cy)
@@ -361,6 +363,53 @@ class TouchMapper(
             }
         }
         return true
+    }
+
+    // ================= v2.4.4 注入统计（诊断抖音等对手势敏感的场景） =================
+    private var statT = 0L
+    private var statD = 0
+    private var statM = 0
+    private var statU = 0
+
+    /** 每秒最多输出一行：通道（桥/回退）+ 事件计数，判断事件到底有没有发出去 */
+    private fun stat(kind: Char) {
+        when (kind) {
+            'D' -> statD++
+            'M' -> statM++
+            'U' -> statU++
+        }
+        val t = now()
+        if (statT == 0L) {
+            statT = t
+            return
+        }
+        if (t - statT >= 1000) {
+            if (statD + statM + statU > 0) {
+                Diag.log(
+                    "注入统计: 通道=${if (Bridge.ok) "桥" else "input命令(回退)"} " +
+                        "D=$statD M=$statM U=$statU /s"
+                )
+            }
+            statT = t
+            statD = 0
+            statM = 0
+            statU = 0
+        }
+    }
+
+    private fun emitDown(x: Float, y: Float) {
+        injector.down(x, y)
+        stat('D')
+    }
+
+    private fun emitMove(x: Float, y: Float) {
+        injector.move(x, y)
+        stat('M')
+    }
+
+    private fun emitUp(x: Float, y: Float) {
+        injector.up(x, y)
+        stat('U')
     }
 
     private fun now() = SystemClock.uptimeMillis()
