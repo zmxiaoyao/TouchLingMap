@@ -219,7 +219,7 @@ class MainActivity : Activity() {
         tvSummary = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFF374151.toInt())
-            lineSpacing(dp(3f), 1f)
+            setLineSpacing(dp(3f).toFloat(), 1f)
         }
         sumCard.addView(tvSummary)
         page1.addView(sumCard)
