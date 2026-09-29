@@ -41,6 +41,9 @@ class MirrorService : Service() {
         @Volatile var mainCursor: MainCursor? = null
         @Volatile var cursorSink: ((Float, Float) -> Unit)? = null
 
+        /** v1.0.0：只把主题/玩具显示到背屏（不做触摸映射注入） */
+        @Volatile var displayOnly = false
+
         fun stop(c: Context) {
             Diag.log("外部请求 stop")
             c.startService(Intent(c, MirrorService::class.java).apply { action = "stop" })
@@ -68,6 +71,9 @@ class MirrorService : Service() {
                 teardown()
                 tornDown = false
                 startAsForeground()
+                displayOnly = intent.getBooleanExtra("displayOnly", false)
+                val noProj = intent.getBooleanExtra("noProjection", false)
+                Diag.log("displayOnly=$displayOnly noProjection=$noProj")
                 val code = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
                 val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
                     intent.getParcelableExtra("resultData", Intent::class.java)
@@ -75,12 +81,12 @@ class MirrorService : Service() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra("resultData")
                 }
-                if (data == null) {
+                if (data == null && !noProj) {
                     Diag.log("resultData 为空 → stopSelf")
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startProjection(code, data)
+                startProjection(code, data, noProj)
             }
             "stop" -> {
                 teardown()
@@ -107,39 +113,43 @@ class MirrorService : Service() {
         }
     }
 
-    private fun startProjection(code: Int, data: Intent) {
-        // 1. 投影会话
-        val mpm = getSystemService(MediaProjectionManager::class.java)
-        val mp = try {
-            mpm.getMediaProjection(code, data)
-        } catch (t: Throwable) {
-            Diag.log("getMediaProjection 抛异常: $t")
-            null
-        }
-        if (mp == null) {
-            Diag.log("mp=null → stopSelf")
-            toast("获取 MediaProjection 失败")
-            stopSelf()
-            return
-        }
-        sessionMp = mp
-        val selfMp = mp
-        mp.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                Diag.log("MediaProjection.onStop 回调")
-                mainHandler.post {
-                    // 会话守卫：只处理自己的会话（防旧回调杀新会话）
-                    if (projection === selfMp) {
-                        Diag.log("会话 onStop → teardown+stopSelf")
-                        teardown()
-                        stopSelf()
-                    } else {
-                        Diag.log("忽略过期会话 onStop")
+    private fun startProjection(code: Int, data: Intent?, noProj: Boolean) {
+        // 1. 投影会话（noProjection 模式：只显示主题/玩具，完全不需要投屏授权）
+        if (noProj) {
+            Diag.log("noProjection 模式：跳过投屏会话（主题/玩具不需要）")
+        } else {
+            val mpm = getSystemService(MediaProjectionManager::class.java)
+            val mp = try {
+                mpm.getMediaProjection(code, data)
+            } catch (t: Throwable) {
+                Diag.log("getMediaProjection 抛异常: $t")
+                null
+            }
+            if (mp == null) {
+                Diag.log("mp=null → stopSelf")
+                toast("获取 MediaProjection 失败")
+                stopSelf()
+                return
+            }
+            sessionMp = mp
+            val selfMp = mp
+            mp.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    Diag.log("MediaProjection.onStop 回调")
+                    mainHandler.post {
+                        // 会话守卫：只处理自己的会话（防旧回调杀新会话）
+                        if (projection === selfMp) {
+                            Diag.log("会话 onStop → teardown+stopSelf")
+                            teardown()
+                            stopSelf()
+                        } else {
+                            Diag.log("忽略过期会话 onStop")
+                        }
                     }
                 }
-            }
-        }, mainHandler)
-        projection = mp
+            }, mainHandler)
+            projection = mp
+        }
 
         // 2. 枚举并找背屏
         val dm = getSystemService(DisplayManager::class.java)
@@ -162,7 +172,7 @@ class MirrorService : Service() {
         // 3.5 主屏光标（v0.5.0）：触控板/体感模式 → 光标画在主屏，背屏当触控板
         val mc = MainCursor(this, cfg.cursorStyle, cfg.cursorSizeIdx, cfg.cursorColor)
         mainCursor = mc
-        if (cfg.toy == 0 && (cfg.mode == "pad" || cfg.gyro)) {
+        if (!displayOnly && cfg.toy == 0 && cfg.htmlTheme == 0 && (cfg.mode == "pad" || cfg.gyro)) {
             if (mc.available) {
                 mc.show()
                 cursorSink = { x, y -> mc.move(x, y) }
