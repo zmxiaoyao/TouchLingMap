@@ -73,6 +73,35 @@ class MainActivity : Activity() {
         refreshThemeList()
     }
 
+    /** v2.2.0：选择「自动启停」白名单应用 */
+    private fun pickApps() {
+        try {
+            val pm = packageManager
+            val apps = pm.getInstalledApplications(0)
+                .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
+                .sortedBy { it.loadLabel(pm).toString() }
+            val labels = apps.map { it.loadLabel(pm).toString() }.toTypedArray()
+            val sel = BooleanArray(apps.size)
+            val cur = (sp.getString("autoApps", "") ?: "")
+                .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            apps.forEachIndexed { i, a -> sel[i] = cur.contains(a.packageName) }
+            android.app.AlertDialog.Builder(this)
+                .setTitle("选择自动启停的应用")
+                .setMultiChoiceItems(labels, sel) { _, i, checked -> sel[i] = checked }
+                .setPositiveButton("保存") { _, _ ->
+                    val chosen = apps.filterIndexed { i, _ -> sel[i] }
+                        .map { it.packageName }
+                    sp.edit().putString("autoApps", chosen.joinToString(",")).apply()
+                    Toast.makeText(this, "已保存 ${chosen.size} 个应用", Toast.LENGTH_SHORT).show()
+                    refreshStatus()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        } catch (t: Throwable) {
+            Toast.makeText(this, "列表失败：${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** v2.0.0：列出所有 display，可手动指定背屏 */
     private fun refreshRearDevices() {
         if (!::rearDevBox.isInitialized) return
@@ -528,6 +557,97 @@ class MainActivity : Activity() {
         })
         page4.addView(devCard)
 
+        // v2.2.0 自动化与快捷
+        val autoCard = card()
+        autoCard.addView(sectionTitle("触摸输入源"))
+        autoCard.addView(optionRow("evdev", 0, listOf("背屏视图（默认）", "evdev 直读")))
+        autoCard.addView(TextView(this).apply {
+            text = "※ evdev 直读：内核层读背屏触摸（需「免投屏触控」+「精密触控板」），背屏视图只做防误触"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+        })
+
+        autoCard.addView(sectionTitle("开机自启").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        autoCard.addView(switchRow("开机自动启动（免投屏触控）", "bootAuto"))
+
+        autoCard.addView(sectionTitle("按应用自动启停").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        val swAutoApp = android.widget.Switch(this).apply {
+            text = "进入白名单应用自动上屏，离开自动停止"
+            textSize = 14f
+            isChecked = sp.getBoolean("autoApp", false)
+            setOnCheckedChangeListener { _, v ->
+                sp.edit().putBoolean("autoApp", v).apply()
+                if (v) {
+                    try {
+                        startForegroundService(
+                            Intent(this@MainActivity, WatchService::class.java)
+                        )
+                    } catch (t: Throwable) {
+                        Diag.log("Watch start: $t")
+                    }
+                    Toast.makeText(
+                        this@MainActivity, "已开启（需授予「使用情况访问」权限）",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    try {
+                        stopService(Intent(this@MainActivity, WatchService::class.java))
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+        autoCard.addView(swAutoApp)
+        val appCount = (sp.getString("autoApps", "") ?: "")
+            .split(",").filter { it.isNotBlank() }.size
+        autoCard.addView(bigButton("📋 选择应用（已选 $appCount 个）", 0xFF6B7280.toInt()) {
+            pickApps()
+        })
+        autoCard.addView(bigButton("🔑 开启「使用情况访问」权限", 0xFF9CA3AF.toInt()) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            } catch (_: Throwable) {
+                Toast.makeText(this, "请手动在设置里授予", Toast.LENGTH_SHORT).show()
+            }
+        })
+
+        autoCard.addView(sectionTitle("悬浮开关").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        val swBall = android.widget.Switch(this).apply {
+            text = "可拖动的小圆点 · 点击=启动/停止"
+            textSize = 14f
+            isChecked = sp.getBoolean("ballOn", false)
+            setOnCheckedChangeListener { _, v ->
+                sp.edit().putBoolean("ballOn", v).apply()
+                if (v) {
+                    if (!android.provider.Settings.canDrawOverlays(this@MainActivity)) {
+                        Toast.makeText(
+                            this@MainActivity, "悬浮开关需要「显示在其他应用上层」权限",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        try {
+                            startActivity(
+                                Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:$packageName")
+                                )
+                            )
+                        } catch (_: Throwable) {
+                        }
+                    }
+                    FloatBall.show(this@MainActivity)
+                } else {
+                    FloatBall.hide()
+                }
+            }
+        }
+        autoCard.addView(swBall)
+        autoCard.addView(TextView(this).apply {
+            text = "💡 控制中心：下拉两次 → 编辑 → 添加「触灵映射开关」磁贴，一键启停"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+        })
+        page4.addView(autoCard)
+
         // 提示
         page1.addView(TextView(this).apply {
             text = "首次使用：装 Shizuku（无线调试启动）→ 点「授权 Shizuku」\n" +
@@ -568,6 +688,12 @@ class MainActivity : Activity() {
         shell.addView(buildNavBar())
         setContentView(shell)
         switchPage(0)
+        // v2.2.0：悬浮开关恢复
+        if (sp.getBoolean("ballOn", false) &&
+            android.provider.Settings.canDrawOverlays(this)
+        ) {
+            FloatBall.show(applicationContext)
+        }
     }
 
     // ---------- 分页 / 液态玻璃导航（v0.9.0） ----------
