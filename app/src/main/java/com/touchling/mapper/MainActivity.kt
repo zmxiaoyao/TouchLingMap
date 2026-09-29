@@ -313,7 +313,7 @@ class MainActivity : Activity() {
         // 样式 / 主题卡（v0.6.0）
         val styleCard = card()
         styleCard.addView(sectionTitle("光标样式"))
-        styleCard.addView(optionRow("cursorStyle", 0, listOf("圆点", "十字", "箭头", "方框")))
+        styleCard.addView(optionRow("cursorStyle", 2, listOf("圆点", "十字", "箭头", "方框")))
         styleCard.addView(sectionTitle("光标颜色"))
         val colorRow = optionRow("cursorColor", 0, listOf("蓝", "白", "红", "绿", "黄"))
         styleCard.addView(colorRow)
@@ -460,9 +460,16 @@ class MainActivity : Activity() {
         setCard.addView(sectionTitle("映射模式"))
         rgMode = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
         rgMode.addView(RadioButton(this).apply { text = "灵触映射"; id = 1001 })
+        rgMode.addView(RadioButton(this).apply { text = "体感光标"; id = 1003 })
         rgMode.addView(RadioButton(this).apply { text = "精密触控板"; id = 1002 })
         setCard.addView(rgMode)
-        rgMode.check(if (sp.getString("mode", "direct") == "direct") 1001 else 1002)
+        rgMode.check(
+            when (sp.getString("mode", "direct")) {
+                "pad" -> 1002
+                "gyro" -> 1003
+                else -> 1001
+            }
+        )
 
         setCard.addView(sectionTitle("黑遮罩（防烧屏）").apply {
             setPadding(0, dp(14f), 0, dp(10f))
@@ -489,6 +496,13 @@ class MainActivity : Activity() {
             isChecked = sp.getBoolean("scroll2", true)
         }
         featCard.addView(swScroll2)
+        // v2.1.0：选「体感光标」模式时自动点亮体感开关
+        rgMode.setOnCheckedChangeListener { _, id ->
+            if (id == 1003) {
+                swGyro.isChecked = true
+                sp.edit().putBoolean("gyro", true).apply()
+            }
+        }
         page4.addView(featCard)
 
         // 背屏设备选择（v2.0.0，参考妙妙「背屏设备」）
@@ -686,7 +700,14 @@ class MainActivity : Activity() {
 
     private fun persistCfg() {
         sp.edit()
-            .putString("mode", if (rgMode.checkedRadioButtonId == 1001) "direct" else "pad")
+            .putString(
+                "mode",
+                when (rgMode.checkedRadioButtonId) {
+                    1002 -> "pad"
+                    1003 -> "gyro"
+                    else -> "direct"
+                }
+            )
             .putFloat("sens", 0.5f + sbSens.progress / 100f)
             .putInt("smoothMs", sbSmooth.progress)
             .putFloat("deadZone", sbDead.progress / 100f)
@@ -965,7 +986,11 @@ class MainActivity : Activity() {
         }
         val toy = listOf("关闭", "转盘", "真心话", "木鱼", "骰子")
             .getOrElse(sp.getInt("toy", 0)) { "关闭" }
-        val mode = if (sp.getString("mode", "direct") == "direct") "灵触映射" else "精密触控板"
+        val mode = when (sp.getString("mode", "direct")) {
+            "pad" -> "精密触控板"
+            "gyro" -> "体感光标"
+            else -> "灵触映射"
+        }
         val ch = when (sp.getString("channel", "auto")) {
             "shizuku" -> "Shizuku"
             "root" -> "Root"
@@ -983,7 +1008,13 @@ class MainActivity : Activity() {
 
     private fun fmt1(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
 
-    /** v2.0.0：陀螺仪校准（平放手机采样 700ms，记录零偏） */
+    /** 用到光标悬浮窗的模式（触控板 / 体感光标） */
+    private fun cursorModeOn(): Boolean {
+        val m = sp.getString("mode", "direct") ?: "direct"
+        return m == "pad" || m == "gyro" || sp.getBoolean("gyro", false)
+    }
+
+    /** v2.1.0：陀螺仪校准（平放手机采样 700ms，记录零偏） */
     private fun calibrateGyro() {
         try {
             val sm = getSystemService(android.hardware.SensorManager::class.java)
@@ -1030,7 +1061,7 @@ class MainActivity : Activity() {
         Diag.log("用户点击 免投屏触控启动")
         persistCfg()
         val mode = sp.getString("mode", "direct") ?: "direct"
-        val gyroOn = sp.getBoolean("gyro", false)
+        val gyroOn = sp.getBoolean("gyro", false) || mode == "gyro"
         if ((mode == "pad" || gyroOn) && !android.provider.Settings.canDrawOverlays(this)) {
             Toast.makeText(
                 this,
