@@ -54,6 +54,8 @@ class MirrorService : Service() {
     private var sessionMp: MediaProjection? = null
     private var keeper: Thread? = null
     @Volatile private var keeperRunning = false
+    private var watchdog: Thread? = null
+    @Volatile private var watchdogRunning = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -278,6 +280,53 @@ class MirrorService : Service() {
         if (!ready) {
             toast("注入通道未就绪——镜像可用，但触摸不会生效")
         }
+
+        // 4.5 背屏看门狗（v1.3.0）：背屏息屏会休眠，任务会被退回主屏 → 自动点亮 + 重新搬运
+        watchdogRunning = true
+        watchdog = Thread {
+            var lastState = -999
+            while (watchdogRunning) {
+                try {
+                    val dm2 = getSystemService(DisplayManager::class.java)
+                    val d1 = dm2.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY }
+                    val st = d1?.state ?: -1
+                    if (st != lastState) {
+                        Diag.log("看门狗：背屏 state=$st")
+                        lastState = st
+                    }
+                    if (d1 != null) {
+                        val asleep = st == Display.STATE_OFF || st == Display.STATE_DOZE ||
+                                st == Display.STATE_DOZE_SUSPEND || st == Display.STATE_UNKNOWN
+                        if (asleep) {
+                            val w = inj.exec(
+                                "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                                    "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                            )
+                            Diag.log("看门狗点亮背屏: ${w.ifBlank { "OK" }}")
+                        }
+                        // 任务被退回主屏 → 重新搬运（仅在有内容需要在背屏时）
+                        val tid = RearActivity.lastTaskId
+                        if (RearActivity.alive && !RearActivity.arrived && tid > 0 && !asleep) {
+                            val out = inj.exec("am display move-stack $tid ${d1.displayId}")
+                            Diag.log("看门狗重搬运: ${out.ifBlank { "OK" }}")
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Diag.log("看门狗异常: $t")
+                }
+                try {
+                    Thread.sleep(5000)
+                } catch (_: Throwable) {
+                    break
+                }
+            }
+            Diag.log("看门狗停止")
+        }.apply {
+            isDaemon = true
+            name = "rear-watchdog"
+            start()
+        }
+        Diag.log("看门狗已启动")
     }
 
     private fun teardown() {
@@ -286,6 +335,8 @@ class MirrorService : Service() {
         Diag.log("teardown 开始")
         keeperRunning = false
         keeper = null
+        watchdogRunning = false
+        watchdog = null
         // 收起主屏光标
         cursorSink = null
         try { mainCursor?.hide() } catch (_: Throwable) {}
