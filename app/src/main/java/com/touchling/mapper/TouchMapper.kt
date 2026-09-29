@@ -133,7 +133,9 @@ class TouchMapper(
     private val cfg: Cfg,
     private val mainW: Int,
     private val mainH: Int,
-    private val onCursor: (Float, Float, Boolean) -> Unit
+    private val onCursor: (Float, Float, Boolean) -> Unit,
+    /** v2.4.5：体感光标当前位置读取（服务级陀螺仪驱动，-1 表示未初始化） */
+    private val gyroPos: () -> Pair<Float, Float> = { -1f to -1f }
 ) {
     // 触控板光标（主屏坐标）
     private var cx = mainW / 2f
@@ -172,7 +174,7 @@ class TouchMapper(
 
     fun handle(e: MotionEvent, view: View): Boolean {
         return when (cfg.mode) {
-            "gyro" -> false
+            "gyro" -> gyroTap(e, view) // v2.4.5：体感光标模式（陀螺仪管移动，触摸轻点=点击光标处）
             "pad" -> pad(e, view)
             "gesture" -> gesture(e, view) // v2.3.0 手势映射
             else -> direct(e, view)
@@ -336,7 +338,8 @@ class TouchMapper(
                 val dx = smoothX
                 val dy = smoothY
                 lastX = e.x; lastY = e.y
-                if (!longPressFired && hypot(e.x - downX, e.y - downY) > 12f) {
+                // v2.4.5：点击判定阈值改用「识别阈值×屏宽」（默认 0.12 → 约背屏宽 12%，手指微动不再误判为拖动）
+                if (!longPressFired && hypot(e.x - downX, e.y - downY) > cfg.gThreshold * view.width) {
                     moved = true
                     view.removeCallbacks(longPressRunnable)
                 }
@@ -410,6 +413,33 @@ class TouchMapper(
     private fun emitUp(x: Float, y: Float) {
         injector.up(x, y)
         stat('U')
+    }
+
+        /** v2.4.5：体感光标模式下的触摸（轻点=点击光标处，微动容差=识别阈值×屏宽） */
+    private var gtMoved = false
+
+    private fun gyroTap(e: MotionEvent, view: View): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = e.x
+                downY = e.y
+                gtMoved = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (hypot(e.x - downX, e.y - downY) > cfg.gThreshold * view.width) {
+                    gtMoved = true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!gtMoved) {
+                    val p = gyroPos()
+                    val px = if (p.first >= 0f) p.first else mainW / 2f
+                    val py = if (p.second >= 0f) p.second else mainH / 2f
+                    injector.tap(px, py)
+                }
+            }
+        }
+        return true
     }
 
     private fun now() = SystemClock.uptimeMillis()
