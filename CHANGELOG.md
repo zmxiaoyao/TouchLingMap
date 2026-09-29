@@ -2,6 +2,20 @@
 
 本项目版本记录。最新版本请见 [Releases](https://github.com/zmxiaoyao/TouchLingMap/releases)。
 
+## v2.4.5
+### 🐛 四项修复（均定位到代码级根因）
+- **体感光标"开始后没反应"**：
+  - 根因①`MirrorService` 中 gyro 模式**直接跳过 evdev**，纯触控模式又没有背屏 Activity → **触摸输入源为零**
+  - 根因②陀螺仪监听原本只在背屏 `RearActivity`，纯触控模式**无人驱动光标**
+  - 修复：gyro 放行 evdev 直读；**服务级陀螺仪监听**（`startGyroFeed`，Activity 存在时自动让位防双驱动）；触摸**轻点=点击光标位置**（`TouchMapper.gyroTap`）
+- **停止后背屏仍常亮（不熄屏）**：
+  - 根因：`set-wakelock acquire` 被多次调用导致 `refCount` 累积（实测 refCount=3），teardown 只 release 一次 → **锁泄漏**，背屏被持续持有
+  - 修复：`acquireWakelockIfNeeded`（已持有则跳过）+ `releaseWakelockUntilFree`（循环 release 至 `held=false`，带日志）
+- **精密触控板点击困难（"必须点同一位置"）**：
+  - 根因：点击容差阈值写死 `12px`（在 976 宽坐标系里仅 1.2%），手指微动即判为拖动
+  - 修复：阈值改为 **「识别阈值 × 屏宽」**（默认 0.12 ≈ 背屏宽 12%，可在手感页调「识别阈值」）
+- 注入统计/坐标系/激活链沿用 v2.4.4
+
 ## v2.4.4
 ### 🐛 目标：解决"仅抖音等应用滑动失效"
 - **注入轨迹密度提升**：灵触映射 MOVE 上报在桥通道下取消节流（全帧率 ≈60fps，原为 25fps）；仅当桥不可用回退 `input` 命令时保留节流。对手势轨迹密度敏感的应用（抖音翻页等）需要连续事件流
