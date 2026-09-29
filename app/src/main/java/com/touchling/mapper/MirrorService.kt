@@ -37,6 +37,10 @@ class MirrorService : Service() {
         @Volatile var projection: MediaProjection? = null
         @Volatile var injectorInstance: Injector? = null
 
+        /** v0.5.0 主屏光标：触控板/体感模式的光标显示在主屏（悬浮窗） */
+        @Volatile var mainCursor: MainCursor? = null
+        @Volatile var cursorSink: ((Float, Float) -> Unit)? = null
+
         fun stop(c: Context) {
             Diag.log("外部请求 stop")
             c.startService(Intent(c, MirrorService::class.java).apply { action = "stop" })
@@ -154,6 +158,24 @@ class MirrorService : Service() {
 
         // 3. 注入通道（Root / Shizuku）
         val cfg = Cfg.load(this)
+
+        // 3.5 主屏光标（v0.5.0）：触控板/体感模式 → 光标画在主屏，背屏当触控板
+        val mc = MainCursor(this)
+        mainCursor = mc
+        if (cfg.mode == "pad" || cfg.gyro) {
+            if (mc.available) {
+                mc.show()
+                cursorSink = { x, y -> mc.move(x, y) }
+                Diag.log("主屏光标已启用（mode=${cfg.mode} gyro=${cfg.gyro}）")
+            } else {
+                cursorSink = null
+                Diag.log("无悬浮窗权限 → 光标回退到背屏")
+                toast("未授予「悬浮窗」权限，光标将回退显示在背屏")
+            }
+        } else {
+            cursorSink = null
+            Diag.log("灵触模式：无需光标")
+        }
         val wantRoot = when (cfg.channel) {
             Injector.CH_ROOT -> true
             Injector.CH_SHIZUKU -> false
@@ -238,6 +260,10 @@ class MirrorService : Service() {
         Diag.log("teardown 开始")
         keeperRunning = false
         keeper = null
+        // 收起主屏光标
+        cursorSink = null
+        try { mainCursor?.hide() } catch (_: Throwable) {}
+        mainCursor = null
         // 恢复官方背屏中心
         try {
             injectorInstance?.send(
