@@ -298,7 +298,7 @@ val frame = BackFrame(this)
             return
         }
         val inj = injector ?: return
-        mapper = TouchMapper(inj, cfg!!, mainW, mainH) { x, y, visible -> moveCursorTo(x, y, visible) }
+        mapper = TouchMapper(inj, cfg!!, mainW, mainH, { x, y, visible -> moveCursorTo(x, y, visible) })
     }
 
     private fun moveCursorTo(x: Float, y: Float, visible: Boolean) {
