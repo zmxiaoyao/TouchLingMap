@@ -284,15 +284,31 @@ class MirrorService : Service() {
                     Thread.sleep(if (noProjection) 150 else 700)
                 } catch (_: Throwable) {
                 }
-                // —— 直投背屏（失败回退"主屏启动 + 搬运"）——
+                // —— 直投背屏（HyperOS 常"假成功"：输出 Starting 但 Activity 未创建，必须以 onCreate 为准）——
                 val shOut = try {
                     inj.exec("am start --display $dispId -n com.touchling.mapper/.RearActivity")
                 } catch (t: Throwable) {
                     "ERR:$t"
                 }
-                val directOk = shOut.contains("Starting") || shOut.contains("Intent")
-                Diag.log("--display 直投 display=$dispId ok=$directOk out=${shOut.take(90)}")
-                if (!directOk) {
+                Diag.log("--display 直投 display=$dispId out=${shOut.take(90)}")
+                // 等 onCreate 写入 taskId（每次最多 2s，以 Activity 真正创建为准）
+                fun awaitTask(ms: Int): Int {
+                    var id = RearActivity.lastTaskId
+                    var w = 0
+                    while (id <= 0 && w < ms) {
+                        try {
+                            Thread.sleep(100)
+                        } catch (_: Throwable) {
+                        }
+                        w += 100
+                        id = RearActivity.lastTaskId
+                    }
+                    return id
+                }
+                var tid = awaitTask(2000)
+                if (tid <= 0) {
+                    // v2.2.3 修复：直投没真正生效 → 必须回退"主屏启动 + 搬运"（v2.2.2 误判成功导致背屏无 Activity）
+                    Diag.log("--display 直投未生效（Activity 未创建），回退主屏启动")
                     mainHandler.post {
                         try {
                             startActivity(
@@ -304,17 +320,7 @@ class MirrorService : Service() {
                             Diag.log("启动 RearActivity 失败: $t")
                         }
                     }
-                }
-                // 等 onCreate 写入 taskId（最多 2s）
-                var tid = RearActivity.lastTaskId
-                var waited = 0
-                while (tid <= 0 && waited < 2000) {
-                    try {
-                        Thread.sleep(100)
-                    } catch (_: Throwable) {
-                    }
-                    waited += 100
-                    tid = RearActivity.lastTaskId
+                    tid = awaitTask(2500)
                 }
                 Diag.log("搬运前 taskId=$tid arrived=${RearActivity.arrived}")
                 if (tid <= 0) {
@@ -352,6 +358,7 @@ class MirrorService : Service() {
             else -> {
                 if (cfg.mode == "pad" && cursorSink == null) {
                     Diag.log("evdev 警告：无悬浮窗权限 → 光标不会移动（请授予「显示在其他应用上层」）")
+                    toast("请授予「显示在其他应用上层」权限，触控板光标才能显示在主屏")
                 }
                 val targetX = back.mode.physicalWidth * 100 - 1
                 val dev = EvdevTouch.detectDevice({ c -> inj.exec(c) }, targetX)
