@@ -56,11 +56,11 @@ class EvdevTouch(
                     when {
                         line.contains("ABS_MT_POSITION_X") -> {
                             val v = hexOf(line)
-                            if (v >= 0) pendX = v
+                            if (v >= 0) pendX = v.toFloat()
                         }
                         line.contains("ABS_MT_POSITION_Y") -> {
                             val v = hexOf(line)
-                            if (v >= 0) pendY = v
+                            if (v >= 0) pendY = v.toFloat()
                         }
                         line.contains("BTN_TOUCH") && line.contains("DOWN") -> {
                             if (pendX >= 0 && pendY >= 0) emit(
