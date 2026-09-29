@@ -30,7 +30,13 @@ class Cfg(
     val rearRot: Int,
     val gyroCalX: Float,
     val gyroCalY: Float,
-    val rearDisplayId: Int
+    val rearDisplayId: Int,
+    // v2.2.0 自动化
+    val evdev: Boolean,
+    val bootAuto: Boolean,
+    val autoApp: Boolean,
+    val autoApps: String,
+    val ballOn: Boolean
 ) {
     /** 平滑系数：把"平滑时间(ms)"换算成每帧插值比例 */
     val smoothFactor: Float
@@ -63,7 +69,12 @@ class Cfg(
                 sp.getInt("rearRot", 0),
                 sp.getFloat("gyroCalX", 0f),
                 sp.getFloat("gyroCalY", 0f),
-                sp.getInt("rearDisplayId", -1)
+                sp.getInt("rearDisplayId", -1),
+                sp.getBoolean("evdev", false),
+                sp.getBoolean("bootAuto", false),
+                sp.getBoolean("autoApp", false),
+                sp.getString("autoApps", "") ?: "",
+                sp.getBoolean("ballOn", false)
             )
         }
     }
