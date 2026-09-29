@@ -46,6 +46,34 @@ class ShizukuInjector : Injector {
         }
     }
 
+    /** 独立进程执行并回读输出（关键命令用，避免持久管道静默失败） */
+    override fun exec(cmd: String): String {
+        return try {
+            if (!alive()) return "SHIZUKU_DOWN"
+            val proc = newRemoteProcess(arrayOf("/system/bin/sh", "-c", cmd))
+                ?: return "NO_PROC"
+            val out = procMember(proc, "getInputStream", InputStream::class.java) as? InputStream
+            val sb = StringBuilder()
+            try {
+                out?.bufferedReader()?.forEachLine { sb.append(it).append('\n') }
+            } catch (_: Throwable) {}
+            destroyProc(proc)
+            sb.toString().trim()
+        } catch (t: Throwable) {
+            "EXEC_ERR:$t"
+        }
+    }
+
+    private fun destroyProc(p: Any) {
+        try {
+            val m = p.javaClass.declaredMethods.firstOrNull {
+                it.name == "destroy" && it.parameterCount == 0
+            }
+            m?.isAccessible = true
+            m?.invoke(p)
+        } catch (_: Throwable) {}
+    }
+
     /** Shizuku binder 存活探测（返回类型按 Boolean/Number 兼容处理） */
     private fun alive(): Boolean = try {
         val v = Shizuku::class.java.getMethod("pingBinder").invoke(null)
