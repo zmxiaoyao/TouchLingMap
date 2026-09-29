@@ -44,6 +44,13 @@ class MainActivity : Activity() {
     // v1.1.0 优化
     private lateinit var tvSummary: TextView
     private lateinit var themeListBox: LinearLayout
+    // v2.0.0 手感参数
+    private lateinit var sbSmooth: SeekBar
+    private lateinit var sbDead: SeekBar
+    private lateinit var sbCursorDp: SeekBar
+    private lateinit var swNoMirror: android.widget.Switch
+    private lateinit var tvRearDev: TextView
+    private lateinit var rearDevBox: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,8 +68,54 @@ class MainActivity : Activity() {
         super.onResume()
         refreshStatus()
         refreshDisplays()
+        refreshRearDevices()
         updateSummary()
         refreshThemeList()
+    }
+
+    /** v2.0.0：列出所有 display，可手动指定背屏 */
+    private fun refreshRearDevices() {
+        if (!::rearDevBox.isInitialized) return
+        val box = rearDevBox
+        box.removeAllViews()
+        val dm = getSystemService(DisplayManager::class.java)
+        val cur = sp.getInt("rearDisplayId", -1)
+        val sb = StringBuilder()
+        dm.displays.forEach { d ->
+            sb.append("· #").append(d.displayId).append(' ')
+                .append(d.name).append(' ')
+                .append('(').append(d.mode.physicalWidth).append('×')
+                .append(d.mode.physicalHeight).append(") ")
+                .append(if (d.state == android.view.Display.STATE_ON) "已点亮" else "未点亮")
+                .append('\n')
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4f), 0, dp(4f))
+            }
+            row.addView(TextView(this).apply {
+                text = (if (d.displayId == cur) "✅ " else "🖥 ") +
+                        "显示 ${d.displayId}（${d.mode.physicalWidth}×${d.mode.physicalHeight}）"
+                textSize = 12f
+                setTextColor(0xFF374151.toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                )
+            })
+            row.addView(smallBtn("设为背屏") {
+                sp.edit().putInt("rearDisplayId", d.displayId).apply()
+                persistCfg()
+                refreshRearDevices()
+                Toast.makeText(this, "已指定显示 ${d.displayId} 为背屏", Toast.LENGTH_SHORT).show()
+            })
+            box.addView(row)
+        }
+        box.addView(smallBtn("恢复自动识别") {
+            sp.edit().putInt("rearDisplayId", -1).apply()
+            refreshRearDevices()
+        })
+        tvRearDev.text = sb.toString().trimEnd() +
+            "\n当前背屏：" + (if (cur < 0) "自动识别" else "显示 #$cur")
     }
 
     override fun onPause() {
@@ -200,6 +253,7 @@ class MainActivity : Activity() {
         val page2 = pageContainer(pad)
         val page3 = pageContainer(pad)
         val page4 = pageContainer(pad)
+        val page5 = pageContainer(pad) // v2.0.0 手感
 
         // 状态卡
         val statusCard = card()
@@ -230,6 +284,13 @@ class MainActivity : Activity() {
         // 快捷操作
         val actionCard = card()
         actionCard.addView(sectionTitle("快捷操作"))
+        swNoMirror = android.widget.Switch(this).apply {
+            text = "免投屏触控（背屏黑屏当触控板 · 不申请屏幕权限）"
+            textSize = 14f
+            isChecked = sp.getBoolean("noMirror", false)
+            setOnCheckedChangeListener { _, v -> sp.edit().putBoolean("noMirror", v).apply() }
+        }
+        actionCard.addView(swNoMirror)
         actionCard.addView(bigButton("开始映射", 0xFF34C759.toInt()) { startProjection() })
         actionCard.addView(bigButton("停止映射", 0xFF8E8E93.toInt()) {
             MirrorService.stop(this)
@@ -256,13 +317,8 @@ class MainActivity : Activity() {
         styleCard.addView(sectionTitle("光标颜色"))
         val colorRow = optionRow("cursorColor", 0, listOf("蓝", "白", "红", "绿", "黄"))
         styleCard.addView(colorRow)
-        styleCard.addView(sectionTitle("光标大小"))
-        styleCard.addView(optionRow("cursorSizeIdx", 1, listOf("小", "中", "大")))
-        styleCard.addView(sectionTitle("方向反转（触控板 / 体感）"))
-        styleCard.addView(switchRow("左右反转", "invX"))
-        styleCard.addView(switchRow("上下反转", "invY"))
         styleCard.addView(TextView(this).apply {
-            text = "※ 样式改动在下次「开始映射」时生效"
+            text = "※ 光标大小 / 方向反转 / 灵敏度已移到「🎮 手感」页"
             textSize = 11f
             setTextColor(0xFF9CA3AF.toInt())
             setPadding(0, dp(8f), 0, 0)
@@ -330,6 +386,58 @@ class MainActivity : Activity() {
         })
         page2.addView(contentCard)
 
+        // 🎮 手感页（v2.0.0，参数参考「妙妙背屏」）
+        val handCard = card()
+        handCard.addView(sectionTitle("触控板速度" + fmt1(sp.getFloat("sens", 1f)) + "×"))
+        sbSens = SeekBar(this).apply {
+            max = 250
+            progress = ((sp.getFloat("sens", 1f) - 0.5f) * 100).toInt().coerceIn(0, 250)
+        }
+        handCard.addView(sbSens)
+
+        handCard.addView(sectionTitle("平滑（低通滤波）").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        sbSmooth = SeekBar(this).apply {
+            max = 300
+            progress = sp.getInt("smoothMs", 0).coerceIn(0, 300)
+        }
+        handCard.addView(sbSmooth)
+
+        handCard.addView(sectionTitle("陀螺仪死区 rad/s").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        sbDead = SeekBar(this).apply {
+            max = 200
+            progress = (sp.getFloat("deadZone", 0.02f) * 100).toInt().coerceIn(0, 200)
+        }
+        handCard.addView(sbDead)
+
+        handCard.addView(sectionTitle("光标大小 dp").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        sbCursorDp = SeekBar(this).apply {
+            max = 48
+            progress = (sp.getInt("cursorDp", 26) - 16).coerceIn(0, 48)
+        }
+        handCard.addView(sbCursorDp)
+
+        handCard.addView(sectionTitle("方向反转").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        handCard.addView(switchRow("光标 X 反转", "invX"))
+        handCard.addView(switchRow("光标 Y 反转", "invY"))
+
+        handCard.addView(sectionTitle("工具").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        handCard.addView(bigButton("🎯 光标回中", 0xFF374151.toInt()) {
+            val dm = resources.displayMetrics
+            MirrorService.mainCursor?.center(dm.widthPixels / 2f, dm.heightPixels / 2f)
+            Toast.makeText(this, "光标已回中（运行中生效）", Toast.LENGTH_SHORT).show()
+        })
+        handCard.addView(bigButton("🧭 陀螺仪校准（平放手机）", 0xFF6B7280.toInt()) { calibrateGyro() })
+
+        handCard.addView(sectionTitle("背屏方向").apply { setPadding(0, dp(12f), 0, dp(6f)) })
+        handCard.addView(optionRow("rearRot", 0, listOf("0°", "90°", "180°", "270°")))
+        handCard.addView(TextView(this).apply {
+            text = "※ 平滑越大越稳但更「粘手」；死区越大越不容易漂移。改动在下次启动后生效。"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(8f), 0, 0)
+        })
+        page5.addView(handCard)
+
         // 注入通道
         val channelCard = card()
         channelCard.addView(sectionTitle("注入通道"))
@@ -355,15 +463,6 @@ class MainActivity : Activity() {
         rgMode.addView(RadioButton(this).apply { text = "精密触控板"; id = 1002 })
         setCard.addView(rgMode)
         rgMode.check(if (sp.getString("mode", "direct") == "direct") 1001 else 1002)
-
-        setCard.addView(sectionTitle("触控板灵敏度").apply {
-            setPadding(0, dp(14f), 0, dp(10f))
-        })
-        sbSens = SeekBar(this).apply {
-            max = 250
-            progress = ((sp.getFloat("sens", 1f) - 0.5f) * 100).toInt().coerceIn(0, 250)
-        }
-        setCard.addView(sbSens)
 
         setCard.addView(sectionTitle("黑遮罩（防烧屏）").apply {
             setPadding(0, dp(14f), 0, dp(10f))
@@ -392,6 +491,29 @@ class MainActivity : Activity() {
         featCard.addView(swScroll2)
         page4.addView(featCard)
 
+        // 背屏设备选择（v2.0.0，参考妙妙「背屏设备」）
+        val devCard = card()
+        devCard.addView(sectionTitle("背屏设备"))
+        tvRearDev = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF374151.toInt())
+        }
+        devCard.addView(tvRearDev)
+        rearDevBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        devCard.addView(rearDevBox)
+        devCard.addView(bigButton("🔍 检测 / 刷新设备", 0xFF4B5563.toInt()) {
+            refreshDisplays()
+            refreshRearDevices()
+            Toast.makeText(this, "已刷新", Toast.LENGTH_SHORT).show()
+        })
+        devCard.addView(TextView(this).apply {
+            text = "※ 默认识别「非主屏」为背屏；如识别不准可在此手动指定。触摸设备：\n" +
+                "/dev/input/event6 · Xiaomi_Touch_Input_1 (97599×59599)"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+        })
+        page4.addView(devCard)
+
         // 提示
         page1.addView(TextView(this).apply {
             text = "首次使用：装 Shizuku（无线调试启动）→ 点「授权 Shizuku」\n" +
@@ -416,6 +538,7 @@ class MainActivity : Activity() {
         )
         pageViews.clear()
         pageViews.add(makePage(page1))
+        pageViews.add(makePage(page5))
         pageViews.add(makePage(page2))
         pageViews.add(makePage(page3))
         pageViews.add(makePage(page4))
@@ -495,6 +618,7 @@ class MainActivity : Activity() {
         navTvs.clear()
         val tabs = listOf(
             "🎛" to "控制",
+            "🎮" to "手感",
             "🖼" to "背屏内容",
             "✨" to "AI 工坊",
             "⚙️" to "设置"
@@ -564,6 +688,9 @@ class MainActivity : Activity() {
         sp.edit()
             .putString("mode", if (rgMode.checkedRadioButtonId == 1001) "direct" else "pad")
             .putFloat("sens", 0.5f + sbSens.progress / 100f)
+            .putInt("smoothMs", sbSmooth.progress)
+            .putFloat("deadZone", sbDead.progress / 100f)
+            .putInt("cursorDp", 16 + sbCursorDp.progress)
             .putInt("mask", sbMask.progress)
             .putString(
                 "channel",
@@ -854,6 +981,88 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun fmt1(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
+
+    /** v2.0.0：陀螺仪校准（平放手机采样 700ms，记录零偏） */
+    private fun calibrateGyro() {
+        try {
+            val sm = getSystemService(android.hardware.SensorManager::class.java)
+            val g = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+            if (g == null) {
+                Toast.makeText(this, "设备无陀螺仪", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val sum = floatArrayOf(0f, 0f)
+            var n = 0
+            val l = object : android.hardware.SensorEventListener {
+                override fun onSensorChanged(e: android.hardware.SensorEvent) {
+                    sum[0] += e.values[2]
+                    sum[1] += e.values[0]
+                    n++
+                }
+
+                override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+            }
+            sm.registerListener(l, g, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+            Toast.makeText(this, "校准中…请平放手机不要动", Toast.LENGTH_SHORT).show()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    sm.unregisterListener(l)
+                } catch (_: Throwable) {
+                }
+                if (n > 0) {
+                    sp.edit()
+                        .putFloat("gyroCalX", sum[0] / n)
+                        .putFloat("gyroCalY", sum[1] / n)
+                        .apply()
+                    Toast.makeText(this, "校准完成（样本 $n，零偏已保存）", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "校准失败：没有采到数据", Toast.LENGTH_SHORT).show()
+                }
+            }, 700)
+        } catch (t: Throwable) {
+            Toast.makeText(this, "校准失败：${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** v2.0.0：免投屏触控启动（背屏黑屏当触控板，不需要屏幕捕获权限） */
+    private fun startNoMirror() {
+        Diag.log("用户点击 免投屏触控启动")
+        persistCfg()
+        val mode = sp.getString("mode", "direct") ?: "direct"
+        val gyroOn = sp.getBoolean("gyro", false)
+        if ((mode == "pad" || gyroOn) && !android.provider.Settings.canDrawOverlays(this)) {
+            Toast.makeText(
+                this,
+                "触控板/体感需要「显示在其他应用上层」权限（用于在主屏画光标）",
+                Toast.LENGTH_LONG
+            ).show()
+            try {
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (_: Throwable) {
+            }
+            return
+        }
+        if (!Injector.rootAvailable() && shizukuState() != "已授权") {
+            Toast.makeText(
+                this, "需要 shell 权限才能搬运到背屏：请先授权 Shizuku/Root", Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val i = Intent(this, MirrorService::class.java).apply {
+            action = "start"
+            putExtra("displayOnly", false)
+            putExtra("noProjection", true)
+        }
+        startForegroundService(i)
+        Toast.makeText(this, "免投屏模式启动中…背屏黑屏即可当触控板", Toast.LENGTH_LONG).show()
+    }
+
     /** v1.0.0：只把主题/玩具显示到背屏（不开启触摸映射，也不需要投屏授权） */
     private fun startDisplayOnly() {
         Diag.log("用户点击 只显示到背屏")
@@ -910,6 +1119,11 @@ class MainActivity : Activity() {
             return
         }
         val channel = sp.getString("channel", "auto") ?: "auto"
+        // v2.0.0：免投屏模式优先（不申请屏幕捕获权限）
+        if (sp.getBoolean("noMirror", false)) {
+            startNoMirror()
+            return
+        }
         when (channel) {
             "root" -> if (!Injector.rootAvailable()) {
                 Toast.makeText(this, "未检测到 su，Root 通道不可用", Toast.LENGTH_LONG).show()
