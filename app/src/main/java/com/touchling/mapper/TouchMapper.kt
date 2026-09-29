@@ -21,8 +21,21 @@ class Cfg(
     val cursorColor: Int,
     val rearBg: Int,
     val toy: Int,
-    val htmlTheme: Int
+    val htmlTheme: Int,
+    // v2.0.0 免投屏触控 + 手感参数（参考妙妙背屏）
+    val noMirror: Boolean,
+    val smoothMs: Int,
+    val deadZone: Float,
+    val cursorDp: Int,
+    val rearRot: Int,
+    val gyroCalX: Float,
+    val gyroCalY: Float,
+    val rearDisplayId: Int
 ) {
+    /** 平滑系数：把"平滑时间(ms)"换算成每帧插值比例 */
+    val smoothFactor: Float
+        get() = if (smoothMs <= 0) 1f else (16f / smoothMs.toFloat()).coerceIn(0.08f, 1f)
+
     companion object {
         fun load(ctx: Context): Cfg {
             val sp = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
@@ -40,7 +53,15 @@ class Cfg(
                 sp.getInt("cursorColor", 0),
                 sp.getInt("rearBg", 0),
                 sp.getInt("toy", 0),
-                sp.getInt("htmlTheme", 0)
+                sp.getInt("htmlTheme", 0),
+                sp.getBoolean("noMirror", false),
+                sp.getInt("smoothMs", 0),
+                sp.getFloat("deadZone", 0.02f),
+                sp.getInt("cursorDp", 26),
+                sp.getInt("rearRot", 0),
+                sp.getFloat("gyroCalX", 0f),
+                sp.getFloat("gyroCalY", 0f),
+                sp.getInt("rearDisplayId", -1)
             )
         }
     }
@@ -78,6 +99,10 @@ class TouchMapper(
     private var lastSendX = 0f
     private var lastSendY = 0f
 
+    // v2.0.0 平滑滤波累加量
+    private var smoothX = 0f
+    private var smoothY = 0f
+
     private val longPressRunnable = Runnable {
         if (!moved && !longPressFired) {
             longPressFired = true
@@ -93,12 +118,23 @@ class TouchMapper(
         return if (cfg.mode == "pad") pad(e, view) else direct(e, view)
     }
 
-    /** 灵触映射：背屏 → 主屏 直接压缩映射 */
+    /** 灵触映射：背屏 → 主屏 直接压缩映射（支持背屏方向旋转） */
     private fun direct(e: MotionEvent, view: View): Boolean {
         val bw = view.width.toFloat().coerceAtLeast(1f)
         val bh = view.height.toFloat().coerceAtLeast(1f)
-        val x = (e.x / bw * mainW).coerceIn(0f, mainW - 1f)
-        val y = (e.y / bh * mainH).coerceIn(0f, mainH - 1f)
+        var nx = e.x / bw
+        var ny = e.y / bh
+        // 背屏方向（0/90/180/270）坐标旋转
+        val rot = cfg.rearRot
+        if (rot == 90) {
+            val t = nx; nx = 1f - ny; ny = t
+        } else if (rot == 180) {
+            nx = 1f - nx; ny = 1f - ny
+        } else if (rot == 270) {
+            val t = nx; nx = ny; ny = 1f - t
+        }
+        val x = (nx * mainW).coerceIn(0f, mainW - 1f)
+        val y = (ny * mainH).coerceIn(0f, mainH - 1f)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastSendX = x; lastSendY = y; lastSendT = now()
@@ -129,8 +165,12 @@ class TouchMapper(
             MotionEvent.ACTION_MOVE -> {
                 val ix = if (cfg.invX) -1f else 1f
                 val iy = if (cfg.invY) -1f else 1f
-                val dx = (e.x - lastX) * ix
-                val dy = (e.y - lastY) * iy
+                // v2.0.0 平滑：低通滤波，减小抖动（0ms = 不滤波）
+                val a = cfg.smoothFactor
+                smoothX += ((e.x - lastX) * ix - smoothX) * a
+                smoothY += ((e.y - lastY) * iy - smoothY) * a
+                val dx = smoothX
+                val dy = smoothY
                 lastX = e.x; lastY = e.y
                 if (!longPressFired && hypot(e.x - downX, e.y - downY) > 12f) {
                     moved = true
