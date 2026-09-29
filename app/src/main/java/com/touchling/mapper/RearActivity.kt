@@ -44,6 +44,9 @@ class RearActivity : Activity() {
     private var injector: Injector? = null
     private var cursor: View? = null
     private var panel: LinearLayout? = null
+    // v0.7.0 背屏互动玩具
+    private var toyBox: FrameLayout? = null
+    private var curToy = 0
     private var expanded = false
     private var touchCount = 0
     private var mainW = 1200
@@ -94,6 +97,35 @@ class RearActivity : Activity() {
         Diag.log("注入器=${injector?.javaClass?.simpleName ?: "null"} gyro=${cfg?.gyro} scroll2=${cfg?.scroll2}")
 
         val frame = BackFrame(this)
+
+        // v0.7.0 背屏互动玩具：选了玩具则跳过映射流程（纯本地互动，不注入主屏）
+        val toyId = cfg?.toy ?: 0
+        if (toyId != 0) {
+            toyBox = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+            frame.addView(toyBox, FrameLayout.LayoutParams(-1, -1))
+            buildToy(toyId)
+            frame.addView(Button(this).apply {
+                text = "切换玩具"
+                textSize = 12f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = (16 * resources.displayMetrics.density).toFloat()
+                    setColor(0x88000000.toInt())
+                }
+                setOnClickListener { cycleToy() }
+            }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                topMargin = (14 * resources.displayMetrics.density).toInt()
+                rightMargin = (14 * resources.displayMetrics.density).toInt()
+            })
+            // 玩具自己处理触摸（子 View 正常分发），不注入主屏
+            frame.touchHandler = null
+            setContentView(frame)
+            applyWindowMode()
+            Diag.log("背屏玩具模式 toy=$toyId")
+            return
+        }
+
         val sv = SurfaceView(this)
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
@@ -174,6 +206,30 @@ class RearActivity : Activity() {
 
         setContentView(frame)
         applyWindowMode()
+    }
+
+    private fun buildToy(id: Int) {
+        val box = toyBox ?: return
+        box.removeAllViews()
+        val v = Toys.build(this, id)
+        if (v != null) {
+            box.addView(v, FrameLayout.LayoutParams(-1, -1))
+            Diag.log("玩具=${Toys.names.getOrElse(id) { "?" }}")
+        }
+        curToy = id
+    }
+
+    private fun cycleToy() {
+        var next = curToy + 1
+        if (next > Toys.names.size - 1) next = 1
+        getSharedPreferences("cfg", MODE_PRIVATE).edit().putInt("toy", next).apply()
+        buildToy(next)
+        try {
+            android.widget.Toast.makeText(
+                this, "已切换到：${Toys.names.getOrElse(next) { "?" }}", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        } catch (_: Throwable) {
+        }
     }
 
     private fun setupMapper(frame: BackFrame) {
