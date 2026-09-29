@@ -23,10 +23,19 @@ class HtmlThemeView(
 
     init {
         setBackgroundColor(Color.BLACK)
+        // v1.1.0 性能与体验优化
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+        isVerticalScrollBarEnabled = false
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = OVER_SCROLL_NEVER
+        keepScreenOn = true
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.allowFileAccess = true
         settings.defaultTextEncodingName = "UTF-8"
+        settings.mediaPlaybackRequiresUserGesture = false
+        settings.cacheMode = android.webkit.WebSettings.LOAD_CACHE_ELSE_NETWORK
+        settings.textZoom = 100
         addJavascriptInterface(Bridge(), "TouchLing")
         loadTheme()
     }
