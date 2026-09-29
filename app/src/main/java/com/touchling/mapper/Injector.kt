@@ -10,6 +10,9 @@ interface Injector {
     fun send(cmd: String)
     fun close()
 
+    /** 独立进程执行命令并回读输出（用于搬运任务等关键命令，失败可见） */
+    fun exec(cmd: String): String
+
     fun down(x: Float, y: Float) =
         send("/system/bin/input motionevent DOWN ${x.toInt()} ${y.toInt()}")
 
@@ -24,6 +27,9 @@ interface Injector {
             "/system/bin/sleep 0.05; " +
             "/system/bin/input motionevent UP ${x.toInt()} ${y.toInt()}"
     )
+
+    /** 注入按键（4=返回 3=Home 187=多任务 26=电源） */
+    fun key(code: Int) = send("/system/bin/input keyevent $code")
 
     companion object {
         const val CH_AUTO = "auto"
