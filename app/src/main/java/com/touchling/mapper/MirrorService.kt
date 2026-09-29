@@ -274,9 +274,26 @@ class MirrorService : Service() {
         }
         Diag.log("keeper 线程已启动")
 
-        // 5. 背屏投放（v2.2.2）：优先 shell `am start --display` 直投背屏（不遮挡当前软件，体验同妙妙）
+        // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块，妙妙同架构）
         val dispId = back.displayId
-        mainHandler.postDelayed({
+        val pureTouch =
+            noProjection && cfg.evdev && !displayOnly && cfg.htmlTheme == 0 && cfg.toy == 0
+        if (pureTouch) {
+            Diag.log("纯触控（免投屏+evdev）：跳过背屏 Activity 与搬运 → 主屏无黑窗")
+            mainHandler.postDelayed({
+                Thread {
+                    try {
+                        Thread.sleep(150)
+                    } catch (_: Throwable) {
+                    }
+                    val wake = inj.exec(
+                        "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                            "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                    )
+                    Diag.log("点亮背屏(纯触控): ${wake.ifBlank { "无输出" }}")
+                }.apply { isDaemon = true }.start()
+            }, 300)
+        } else mainHandler.postDelayed({
             // v2.2.1：免投屏模式没有投影会话，也要走"点亮+搬运"（否则黑屏卡在主屏）
             if (projection == null && !noProjection) return@postDelayed
             Thread {
@@ -353,7 +370,7 @@ class MirrorService : Service() {
             displayOnly -> Diag.log("evdev 跳过：只显示模式（无触摸映射）")
             cfg.mode == "gyro" ->
                 Diag.log("evdev 跳过：体感光标模式暂不支持直读（请改用灵触映射或精密触控板）")
-            cfg.mode != "pad" && cfg.mode != "direct" ->
+            cfg.mode != "pad" && cfg.mode != "direct" && cfg.mode != "gesture" ->
                 Diag.log("evdev 跳过：未知模式 ${cfg.mode}")
             else -> {
                 if (cfg.mode == "pad" && cursorSink == null) {
