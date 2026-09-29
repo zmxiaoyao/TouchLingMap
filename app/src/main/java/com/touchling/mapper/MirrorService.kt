@@ -205,7 +205,7 @@ class MirrorService : Service() {
             val cmd = "tid=\$(cat /sdcard/Android/data/com.touchling.mapper/files/taskid.txt 2>/dev/null); " +
                 "echo \"taskId=\$tid\" > $logPath; " +
                 "if [ -n \"\$tid\" ]; then " +
-                "service call activity_task 50 i32 \$tid i32 $dispId >> $logPath 2>&1; " +
+                "am display move-stack \$tid $dispId >> $logPath 2>&1; " +
                 "sleep 1; dumpsys activity activities | grep -m2 RearActivity >> $logPath 2>&1; " +
                 "else echo 'taskid.txt 缺失' >> $logPath; fi"
             inj.send(cmd)
