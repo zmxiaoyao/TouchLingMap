@@ -11,13 +11,26 @@ android {
         applicationId = "com.touchling.mapper"
         minSdk = 31
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.3.3"
+        versionCode = 7
+        versionName = "0.3.4"
+    }
+
+    signingConfigs {
+        create("fixed") {
+            storeFile = rootProject.file("signing/touchling.keystore")
+            storePassword = "touchling123"
+            keyAlias = "touchling"
+            keyPassword = "touchling123"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("fixed")
         }
     }
     compileOptions {
