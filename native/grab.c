@@ -37,7 +37,15 @@ int main(int argc, char **argv) {
         printf("G_ERR open\n");
         return 1;
     }
-    if (ioctl(fd, EVIOCGRAB, 1) < 0) {
+    /* v2.4.8：EVIOCGRAB 重试 —— 快速重开时旧 grab 进程可能尚未退出（EBUSY 竞态），
+ * 最多重试 6 次 ×200ms 等旧进程释放（照抄参考实现"启动前先清旧进程"的防护思路）。 */
+    int grabbed = -1;
+    for (int i = 0; i < 6; i++) {
+        grabbed = ioctl(fd, EVIOCGRAB, 1);
+        if (grabbed == 0) break;
+        usleep(200000);
+    }
+    if (grabbed < 0) {
         printf("G_ERR grab\n");
         close(fd);
         return 1;
