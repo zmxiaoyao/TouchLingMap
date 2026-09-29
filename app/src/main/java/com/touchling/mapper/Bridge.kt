@@ -140,6 +140,97 @@ object Bridge {
         Diag.log("实时触控桥已停止")
     }
 
+    // ================= v2.4.7 背屏电源桥（1:1 照抄参考实现 RearPowerBridge 的调用方式） =================
+
+    @Volatile
+    var powerOk = false
+        private set
+
+    private var powerRemote: Any? = null
+    private var powerOut: OutputStream? = null
+    private var powerTry = 0L
+
+    /**
+     * 启动电源桥（app_process 跑 PowerBridge）：
+     * per-display WakeLock + wakeUp 隐藏 API，进程存活 = 持锁中。
+     * 作为 `cmd power set-wakelock` 不可用时的兜底路径。
+     */
+    @Synchronized
+    fun startPower(useRoot: Boolean, apkPath: String, displayId: Int): Boolean {
+        if (powerOk) return true
+        val now = System.currentTimeMillis()
+        if (now - powerTry < 5000) return false
+        powerTry = now
+        if (!apkPath.contains("base.apk")) return false
+        val sh = "exec env CLASSPATH='$apkPath' /system/bin/app_process /system/bin com.touchling.mapper.PowerBridge $displayId"
+        return try {
+            val proc: Any
+            val inp: InputStream
+            if (useRoot) {
+                val p = Runtime.getRuntime().exec(arrayOf("su", "-c", sh))
+                drain(p.errorStream)
+                proc = p
+                powerOut = p.outputStream
+                inp = p.inputStream
+            } else {
+                val sp = shizukuProcess(sh) ?: run {
+                    Diag.log("PowerBridge: Shizuku newProcess 不可用")
+                    return false
+                }
+                proc = sp
+                powerOut = member(sp, "getOutputStream", OutputStream::class.java) as? OutputStream
+                    ?: return false
+                inp = member(sp, "getInputStream", InputStream::class.java) as? InputStream
+                    ?: return false
+            }
+            val ready = CountDownLatch(1)
+            Thread {
+                try {
+                    val br = inp.bufferedReader()
+                    val first = br.readLine()
+                    if (first == "MM_POWER_READY") {
+                        ready.countDown()
+                    } else {
+                        Diag.log("PowerBridge 握手失败: $first")
+                    }
+                    // 进程靠 stdin 保活；这里持续排空（读到 null = 进程退出 = 锁已释放）
+                    while (br.readLine() != null) {
+                    }
+                    powerOk = false
+                } catch (_: Throwable) {
+                }
+            }.apply { isDaemon = true; name = "powerbridge-reader"; start() }
+
+            if (!ready.await(3, TimeUnit.SECONDS)) {
+                Diag.log("PowerBridge 启动超时（3s 无 MM_POWER_READY）")
+                destroy(proc)
+                return false
+            }
+            powerRemote = proc
+            powerOk = true
+            Diag.log("背屏电源桥就绪（${if (useRoot) "root" else "shizuku"} · display=$displayId）")
+            true
+        } catch (t: Throwable) {
+            Diag.log("PowerBridge 启动异常: $t")
+            false
+        }
+    }
+
+    /** 停止电源桥（关闭 stdin → 进程 readLine 返回 null → 释放 WakeLock 退出） */
+    @Synchronized
+    fun stopPower() {
+        if (!powerOk && powerRemote == null) return
+        try {
+            powerOut?.close()
+        } catch (_: Throwable) {
+        }
+        powerRemote?.let { destroy(it) }
+        powerOut = null
+        powerRemote = null
+        powerOk = false
+        Diag.log("背屏电源桥已停止（锁已释放）")
+    }
+
     // ---------- Shizuku 进程工具（与 ShizukuInjector 同款反射） ----------
 
     private fun shizukuProcess(cmd: String): Any? {
