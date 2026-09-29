@@ -244,6 +244,7 @@ class MainActivity : Activity() {
                     sp.edit().putInt(key, i).apply()
                     paint()
                     persistCfg()
+                    guardStop("设置变更")
                 }
             }
             btns.add(b)
@@ -273,6 +274,7 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, v ->
                 sp.edit().putBoolean(key, v).apply()
                 persistCfg()
+                guardStop("设置变更（$label）")
             }
         })
         return row
@@ -331,7 +333,10 @@ class MainActivity : Activity() {
             text = "免投屏触控（背屏黑屏当触控板 · 不申请屏幕权限）"
             textSize = 14f
             isChecked = sp.getBoolean("noMirror", true)
-            setOnCheckedChangeListener { _, v -> sp.edit().putBoolean("noMirror", v).apply() }
+            setOnCheckedChangeListener { _, v ->
+                sp.edit().putBoolean("noMirror", v).apply()
+                guardStop("免投屏开关变更")
+            }
         }
         actionCard.addView(swNoMirror)
         btnStart = bigButton("▶ 开始映射", 0xFF34C759.toInt()) {
@@ -346,10 +351,6 @@ class MainActivity : Activity() {
             }
         }
         actionCard.addView(btnStart!!)
-        actionCard.addView(bigButton("停止映射", 0xFF8E8E93.toInt()) {
-            MirrorService.stop(this)
-            Toast.makeText(this, "已请求停止", Toast.LENGTH_SHORT).show()
-        })
         actionCard.addView(bigButton("🖼 只显示主题到背屏", 0xFF0A84FF.toInt()) { startDisplayOnly() })
         actionCard.addView(bigButton("授权 Shizuku", 0xFF007AFF.toInt()) {
             try {
@@ -571,6 +572,10 @@ class MainActivity : Activity() {
             if (id == 1003) {
                 swGyro.isChecked = true
                 sp.edit().putBoolean("gyro", true).apply()
+            } else if (swGyro.isChecked) {
+                // v2.2.3：从「体感光标」切回 灵触/触控板 → 自动关闭体感空鼠
+                swGyro.isChecked = false
+                sp.edit().putBoolean("gyro", false).apply()
             }
         }
         page4.addView(featCard)
@@ -602,6 +607,12 @@ class MainActivity : Activity() {
         val autoCard = card()
         autoCard.addView(sectionTitle("触摸输入源"))
         autoCard.addView(optionRow("evdev", 1, listOf("背屏视图", "evdev 直读（推荐）")))
+        autoCard.addView(TextView(this).apply {
+            text = "※ 控制中心磁贴（一键开/停）：下拉控制中心 → 编辑磁贴 → 添加「触灵映射」（系统不允许 App 自动添加，需手动放一次）"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(8f), 0, 0)
+        })
         autoCard.addView(TextView(this).apply {
             text = "※ evdev 直读：内核层读背屏触摸；镜像 / 免投屏 都可用，" +
                 "灵触映射 / 精密触控板 都支持（体感光标暂不支持）；背屏视图只做防误触"
@@ -741,6 +752,16 @@ class MainActivity : Activity() {
     // ---------- 分页 / 液态玻璃导航（v0.9.0） ----------
 
     /** v2.2.1 页面标题（排版统一） */
+    /** v2.2.3：映射运行中改设置 → 自动停止映射（防设置写入与运行态冲突导致异常） */
+    private fun guardStop(reason: String) {
+        if (MirrorService.running) {
+            MirrorService.stop(this)
+            Toast.makeText(this, "$reason → 已自动停止映射，重新点开始生效", Toast.LENGTH_LONG).show()
+            uiTick.removeCallbacks(tick)
+            uiTick.post(tick)
+        }
+    }
+
     /** v2.2.2：滑条标题实时显示数值 */
     private fun bindLabel(tv: TextView, bar: SeekBar, fmt: (Int) -> String) {
         tv.text = fmt(bar.progress)
@@ -750,7 +771,11 @@ class MainActivity : Activity() {
             }
 
             override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                // v2.2.3：滑条松手即落盘；映射中调整 → 自动停止
+                persistCfg()
+                guardStop("滑条调整")
+            }
         })
     }
 
