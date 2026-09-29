@@ -41,6 +41,10 @@ class MainActivity : Activity() {
     private val navTvs = mutableListOf<Pair<TextView, TextView>>()
     private var currentPage = -1
 
+    // v1.1.0 优化
+    private lateinit var tvSummary: TextView
+    private lateinit var themeListBox: LinearLayout
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sp = getSharedPreferences("cfg", MODE_PRIVATE)
@@ -57,6 +61,8 @@ class MainActivity : Activity() {
         super.onResume()
         refreshStatus()
         refreshDisplays()
+        updateSummary()
+        refreshThemeList()
     }
 
     override fun onPause() {
@@ -207,6 +213,17 @@ class MainActivity : Activity() {
         statusCard.addView(tvDisplay)
         page1.addView(statusCard)
 
+        // 当前配置摘要（v1.1.0）
+        val sumCard = card()
+        sumCard.addView(sectionTitle("当前配置"))
+        tvSummary = TextView(this).apply {
+            textSize = 13f
+            setTextColor(0xFF374151.toInt())
+            lineSpacing(dp(3f), 1f)
+        }
+        sumCard.addView(tvSummary)
+        page1.addView(sumCard)
+
         // 快捷操作
         val actionCard = card()
         actionCard.addView(sectionTitle("快捷操作"))
@@ -282,6 +299,9 @@ class MainActivity : Activity() {
             setPadding(0, dp(4f), 0, dp(8f))
         }
         aiCard.addView(tvAiStatus)
+        aiCard.addView(sectionTitle("已保存的主题"))
+        themeListBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        aiCard.addView(themeListBox)
         page3.addView(aiCard)
 
         // 背屏内容卡（v1.0.0）：显示什么 + 一键只上屏（不开启触摸映射）
@@ -612,7 +632,9 @@ class MainActivity : Activity() {
             saveTheme(DefaultTheme.HTML)
             sp.edit().putInt("htmlTheme", 4).apply()
             persistCfg()
-            tvAiStatus.text = "未填 API Key → 已保存「内置木鱼主题」，并把背屏内容切到「我的AI」（可在背屏内容页改选内置其他主题）"
+            tvAiStatus.text = "未填 API Key → 已保存「内置木鱼主题」，并把背屏内容切到「我的AI」"
+            refreshThemeList()
+            updateSummary()
             return
         }
         tvAiStatus.text = "生成中…（最长 2 分钟，请勿退出）"
@@ -661,6 +683,8 @@ class MainActivity : Activity() {
                 Diag.log("AI 主题生成成功 ${html.length} 字符")
                 runOnUiThread {
                     tvAiStatus.text = "✅ 已生成并保存（${html.length} 字符）→ 背屏主题已切到「我的AI主题」"
+                    refreshThemeList()
+                    updateSummary()
                 }
             } catch (t: Throwable) {
                 Diag.log("AI 主题生成失败: $t")
@@ -688,9 +712,111 @@ class MainActivity : Activity() {
         try {
             val dir = java.io.File(filesDir, "themes")
             if (!dir.exists()) dir.mkdirs()
-            java.io.File(dir, "ai.html").writeText(html)
+            val stamp = java.text.SimpleDateFormat("MMdd_HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+            val name = "theme_$stamp.html"
+            java.io.File(dir, name).writeText(html)
+            sp.edit().putString("aiThemeFile", name).apply()
+            Diag.log("主题已保存 $name (${html.length} 字符)")
         } catch (t: Throwable) {
             Diag.log("保存主题失败: $t")
+        }
+    }
+
+    /** 刷新「已保存的主题」列表（选用 / 删除） */
+    private fun refreshThemeList() {
+        if (!::themeListBox.isInitialized) return
+        val box = themeListBox
+        box.removeAllViews()
+        val dir = java.io.File(filesDir, "themes")
+        val list = dir.listFiles { f -> f.isFile && f.name.endsWith(".html") }
+            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+        if (list.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "（还没有已保存的主题，用上面按钮生成一个吧）"
+                textSize = 12f
+                setTextColor(0xFF9CA3AF.toInt())
+            })
+            return
+        }
+        val cur = sp.getString("aiThemeFile", "") ?: ""
+        list.forEach { f ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4f), 0, dp(4f))
+            }
+            row.addView(TextView(this).apply {
+                text = (if (f.name == cur) "✅ " else "📄 ") + f.name
+                textSize = 12f
+                setTextColor(0xFF374151.toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                )
+            })
+            row.addView(smallBtn("选用") {
+                sp.edit().putString("aiThemeFile", f.name).putInt("htmlTheme", 4).apply()
+                persistCfg()
+                tvAiStatus.text = "已选用 ${f.name}（背屏内容 = 我的AI）"
+                refreshThemeList()
+                updateSummary()
+            })
+            row.addView(smallBtn("删除") {
+                try {
+                    f.delete()
+                } catch (_: Throwable) {
+                }
+                if (f.name == (sp.getString("aiThemeFile", "") ?: "")) {
+                    sp.edit().putString("aiThemeFile", "").apply()
+                }
+                refreshThemeList()
+            })
+            box.addView(row)
+        }
+    }
+
+    private fun smallBtn(text: String, onClick: () -> Unit): Button = Button(this).apply {
+        this.text = text
+        textSize = 12f
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        background = GradientDrawable().apply {
+            cornerRadius = dp(10f).toFloat()
+            setColor(0xFF4B5563.toInt())
+        }
+        setPadding(dp(12f), dp(2f), dp(12f), dp(2f))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(6f) }
+        setOnClickListener { onClick() }
+    }
+
+    /** 控制页配置摘要 */
+    private fun updateSummary() {
+        if (!::tvSummary.isInitialized) return
+        val theme = when (sp.getInt("htmlTheme", 0)) {
+            1 -> "电子木鱼"
+            2 -> "翻页时钟"
+            3 -> "幸运转盘"
+            4 -> "我的 AI 主题"
+            else -> "关闭"
+        }
+        val toy = listOf("关闭", "转盘", "真心话", "木鱼", "骰子")
+            .getOrElse(sp.getInt("toy", 0)) { "关闭" }
+        val mode = if (sp.getString("mode", "direct") == "direct") "灵触映射" else "精密触控板"
+        val ch = when (sp.getString("channel", "auto")) {
+            "shizuku" -> "Shizuku"
+            "root" -> "Root"
+            else -> "自动"
+        }
+        val bg = listOf("镜像", "纯黑", "网格").getOrElse(sp.getInt("rearBg", 0)) { "镜像" }
+        tvSummary.text = buildString {
+            append("🎨 背屏内容：").append(theme).append('\n')
+            append("🧸 互动玩具：").append(toy).append('\n')
+            append("🖼 背屏底色：").append(bg).append('\n')
+            append("👆 触摸映射：").append(mode).append('\n')
+            append("🔌 注入通道：").append(ch)
         }
     }
 
