@@ -30,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var sbGMs: SeekBar
     private lateinit var sbGTapX: SeekBar
     private lateinit var sbGTapY: SeekBar
+    // v2.4.0 触控板速度（独立于灵敏度）
+    private lateinit var sbPadSens: SeekBar
     private lateinit var swGyro: android.widget.Switch
     private lateinit var swScroll2: android.widget.Switch
 
@@ -224,12 +226,22 @@ class MainActivity : Activity() {
         "?"
     }
 
-    /** 单选行（把 int 选项存进 prefs） */
-    private fun optionRow(key: String, def: Int, labels: List<String>): LinearLayout {
+    /** 单选行（把 int 选项存进 prefs；values 非空时存"值"，def 为默认索引） */
+    private fun optionRow(
+        key: String,
+        def: Int,
+        labels: List<String>,
+        values: IntArray? = null
+    ): LinearLayout {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val btns = mutableListOf<Button>()
+        fun curIdx(): Int {
+            if (values == null) return sp.getInt(key, def)
+            val raw = sp.getInt(key, values[def])
+            return values.indexOf(raw).takeIf { it >= 0 } ?: def
+        }
         fun paint() {
-            val cur = sp.getInt(key, def)
+            val cur = curIdx()
             btns.forEachIndexed { i, b ->
                 b.background = GradientDrawable().apply {
                     cornerRadius = dp(10f).toFloat()
@@ -247,7 +259,7 @@ class MainActivity : Activity() {
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 ).apply { rightMargin = dp(6f) }
                 setOnClickListener {
-                    sp.edit().putInt(key, i).apply()
+                    sp.edit().putInt(key, if (values != null) values[i] else i).apply()
                     paint()
                     persistCfg()
                     guardStop("设置变更")
@@ -450,50 +462,71 @@ class MainActivity : Activity() {
         })
         page2.addView(contentCard)
 
-        // 🎮 手感页（v2.0.0，参数参考「妙妙背屏」）
+        // 🎮 手感页（参数范围与默认值对齐主流触控方案）
         page5.addView(pageTitle("手感"))
         val handCard = card()
-        val tvSensL = sectionTitle("触控板速度")
+        // 【光标】灵敏度（0.2~4.0，默认 1.5）
+        val tvSensL = sectionTitle("灵敏度")
         sbSens = SeekBar(this).apply {
-            max = 250
-            progress = ((sp.getFloat("sens", 1f) - 0.5f) * 100).toInt().coerceIn(0, 250)
+            max = 380
+            progress =
+                ((sp.getFloat("sensitivity", 1.5f) - 0.2f) * 100).toInt().coerceIn(0, 380)
         }
         handCard.addView(tvSensL)
         handCard.addView(sbSens)
-        bindLabel(tvSensL, sbSens) { "触控板速度 ${fmt1(0.5f + it / 100f)}×" }
+        bindLabel(tvSensL, sbSens) {
+            "灵敏度 ${String.format(java.util.Locale.US, "%.1f", 0.2f + it / 100f)}×"
+        }
 
+        // 平滑（0~0.2s，默认 0.045s）
         val tvSmoothL = sectionTitle("平滑").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbSmooth = SeekBar(this).apply {
-            max = 300
-            progress = sp.getInt("smoothMs", 0).coerceIn(0, 300)
+            max = 200
+            progress = (sp.getFloat("smoothing", 0.045f) * 1000).toInt().coerceIn(0, 200)
         }
         handCard.addView(tvSmoothL)
         handCard.addView(sbSmooth)
-        bindLabel(tvSmoothL, sbSmooth) { "平滑（低通滤波）$it ms" }
+        bindLabel(tvSmoothL, sbSmooth) {
+            "平滑 ${String.format(java.util.Locale.US, "%.3f", it / 1000f)} s"
+        }
 
+        // 死区（0~0.08 rad/s，默认 0.018）
         val tvDeadL = sectionTitle("死区").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbDead = SeekBar(this).apply {
-            max = 200
-            progress = (sp.getFloat("deadZone", 0.02f) * 100).toInt().coerceIn(0, 200)
+            max = 80
+            progress = (sp.getFloat("deadzone", 0.018f) * 1000).toInt().coerceIn(0, 80)
         }
         handCard.addView(tvDeadL)
         handCard.addView(sbDead)
-        bindLabel(
-            tvDeadL, sbDead
-        ) { "陀螺仪死区 ${String.format(java.util.Locale.US, "%.2f", it / 100f)} rad/s" }
+        bindLabel(tvDeadL, sbDead) {
+            "死区 ${String.format(java.util.Locale.US, "%.3f", it / 1000f)} rad/s"
+        }
 
+        // 光标大小（16~96 dp，默认 32）
         val tvCursorL = sectionTitle("光标大小").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbCursorDp = SeekBar(this).apply {
-            max = 48
-            progress = (sp.getInt("cursorDp", 26) - 16).coerceIn(0, 48)
+            max = 80
+            progress = (sp.getInt("cursorSize", 32) - 16).coerceIn(0, 80)
         }
         handCard.addView(tvCursorL)
         handCard.addView(sbCursorDp)
         bindLabel(tvCursorL, sbCursorDp) { "光标大小 ${16 + it} dp" }
 
+        // 触控板速度（0.3~3.0，默认 1.4，独立于灵敏度）
+        val tvPadL = sectionTitle("触控板速度").apply { setPadding(0, dp(12f), 0, dp(6f)) }
+        sbPadSens = SeekBar(this).apply {
+            max = 270
+            progress = ((sp.getFloat("touchpad", 1.4f) - 0.3f) * 100).toInt().coerceIn(0, 270)
+        }
+        handCard.addView(tvPadL)
+        handCard.addView(sbPadSens)
+        bindLabel(tvPadL, sbPadSens) {
+            "触控板速度 ${String.format(java.util.Locale.US, "%.1f", 0.3f + it / 100f)}×"
+        }
+
         handCard.addView(sectionTitle("方向反转").apply { setPadding(0, dp(12f), 0, dp(4f)) })
-        handCard.addView(switchRow("光标 X 反转", "invX", true))
-        handCard.addView(switchRow("光标 Y 反转", "invY"))
+        handCard.addView(switchRow("光标 X 反转", "invertX"))
+        handCard.addView(switchRow("光标 Y 反转", "invertY"))
 
         handCard.addView(sectionTitle("工具").apply { setPadding(0, dp(12f), 0, dp(4f)) })
         handCard.addView(bigButton("🎯 光标回中", 0xFF374151.toInt()) {
@@ -513,14 +546,14 @@ class MainActivity : Activity() {
         })
         page5.addView(handCard)
 
-        // 🖐 手势映射参数（v2.3.0：算法与默认值 1:1 逆向自「妙妙背屏」）
+        // 🖐 手势映射参数
         page5.addView(pageTitle("手势"))
         val gCard = card()
-        gCard.addView(sectionTitle("手势映射参数（妙妙同款）"))
+        gCard.addView(sectionTitle("手势映射参数"))
         val tvG1 = sectionTitle("识别阈值")
         sbGThresh = SeekBar(this).apply {
             max = 30
-            progress = ((sp.getFloat("gThreshold", 0.12f) - 0.05f) * 100).toInt().coerceIn(0, 30)
+            progress = ((sp.getFloat("threshold", 0.12f) - 0.05f) * 100).toInt().coerceIn(0, 30)
         }
         gCard.addView(tvG1)
         gCard.addView(sbGThresh)
@@ -531,7 +564,7 @@ class MainActivity : Activity() {
         val tvG2 = sectionTitle("滑动距离").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbGLen = SeekBar(this).apply {
             max = 60
-            progress = ((sp.getFloat("gSwipeLen", 0.46f) - 0.15f) * 100).toInt().coerceIn(0, 60)
+            progress = ((sp.getFloat("swipeLength", 0.46f) - 0.15f) * 100).toInt().coerceIn(0, 60)
         }
         gCard.addView(tvG2)
         gCard.addView(sbGLen)
@@ -542,44 +575,60 @@ class MainActivity : Activity() {
         val tvG3 = sectionTitle("滑动时长").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbGMs = SeekBar(this).apply {
             max = 530
-            progress = (sp.getInt("gSwipeMs", 260) - 120).coerceIn(0, 530)
+            progress = (sp.getInt("swipeMs", 260) - 120).coerceIn(0, 530)
         }
         gCard.addView(tvG3)
         gCard.addView(sbGMs)
         bindLabel(tvG3, sbGMs) { "滑动时长 ${120 + it} ms" }
 
-        gCard.addView(switchRow("上下反转", "gInvert").apply { setPadding(0, dp(12f), 0, dp(4f)) })
+        gCard.addView(switchRow("上下反转", "invertSwipe").apply { setPadding(0, dp(12f), 0, dp(4f)) })
 
         val tvG4 = sectionTitle("点击 X").apply { setPadding(0, dp(8f), 0, dp(6f)) }
         sbGTapX = SeekBar(this).apply {
-            max = 96
-            progress = ((sp.getFloat("gTapX", 0.5f) - 0.02f) * 100).toInt().coerceIn(0, 96)
+            max = 90
+            progress = ((sp.getFloat("tapX", 0.5f) - 0.05f) * 100).toInt().coerceIn(0, 90)
         }
         gCard.addView(tvG4)
         gCard.addView(sbGTapX)
         bindLabel(tvG4, sbGTapX) {
-            "点击 X ${String.format(java.util.Locale.US, "%.2f", 0.02f + it / 100f)}"
+            "点击 X ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
         }
 
         val tvG5 = sectionTitle("点击 Y").apply { setPadding(0, dp(12f), 0, dp(6f)) }
         sbGTapY = SeekBar(this).apply {
-            max = 96
-            progress = ((sp.getFloat("gTapY", 0.5f) - 0.02f) * 100).toInt().coerceIn(0, 96)
+            max = 90
+            progress = ((sp.getFloat("tapY", 0.5f) - 0.05f) * 100).toInt().coerceIn(0, 90)
         }
         gCard.addView(tvG5)
         gCard.addView(sbGTapY)
         bindLabel(tvG5, sbGTapY) {
-            "点击 Y ${String.format(java.util.Locale.US, "%.2f", 0.02f + it / 100f)}"
+            "点击 Y ${String.format(java.util.Locale.US, "%.2f", 0.05f + it / 100f)}"
         }
 
         gCard.addView(TextView(this).apply {
             text = "※ 手势映射：背屏 上/下/左/右 划一下 → 主屏执行系统级滑动；轻点 → 点击（位置=点击X/Y）；" +
-                "位移超过识别阈值才判定为滑动。算法与默认值逆向自「妙妙背屏」，滑动更准"
+                "位移超过识别阈值才判定为滑动"
             textSize = 11f
             setTextColor(0xFF9CA3AF.toInt())
             setPadding(0, dp(10f), 0, 0)
         })
         page5.addView(gCard)
+
+        // 背屏方向（0°/90°/180°/270° 分段）
+        page5.addView(pageTitle("背屏方向"))
+        val rotCard = card()
+        rotCard.addView(
+            optionRow(
+                "rearRot", 0, listOf("0°", "90°", "180°", "270°"), intArrayOf(0, 90, 180, 270)
+            )
+        )
+        rotCard.addView(TextView(this).apply {
+            text = "调整后重新开始映射生效"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(4f), 0, 0)
+        })
+        page5.addView(rotCard)
 
         // 注入通道
         val channelCard = card()
@@ -656,7 +705,7 @@ class MainActivity : Activity() {
         }
         page4.addView(featCard)
 
-        // 背屏设备选择（v2.0.0，参考妙妙「背屏设备」）
+        // 背屏设备选择
         val devCard = card()
         devCard.addView(sectionTitle("背屏设备"))
         tvRearDev = TextView(this).apply {
@@ -683,6 +732,7 @@ class MainActivity : Activity() {
         val autoCard = card()
         autoCard.addView(sectionTitle("触摸输入源"))
         autoCard.addView(optionRow("evdev", 1, listOf("背屏视图", "evdev 直读（推荐）")))
+        autoCard.addView(switchRow("独占背屏触摸（内核层拦截）", "capture", true))
         autoCard.addView(TextView(this).apply {
             text = "※ 控制中心磁贴（一键开/停）：下拉控制中心 → 编辑磁贴 → 添加「触灵映射」（系统不允许 App 自动添加，需手动放一次）"
             textSize = 11f
@@ -1000,17 +1050,19 @@ class MainActivity : Activity() {
                     else -> "direct"
                 }
             )
-            .putFloat("sens", 0.5f + sbSens.progress / 100f)
+            .putFloat("sensitivity", 0.2f + sbSens.progress / 100f)
+            .putFloat("smoothing", sbSmooth.progress / 1000f)
             .putInt("smoothMs", sbSmooth.progress)
-            .putFloat("deadZone", sbDead.progress / 100f)
-            .putInt("cursorDp", 16 + sbCursorDp.progress)
+            .putFloat("deadzone", sbDead.progress / 1000f)
+            .putInt("cursorSize", 16 + sbCursorDp.progress)
+            .putFloat("touchpad", 0.3f + sbPadSens.progress / 100f)
             .putInt("mask", sbMask.progress)
-            // v2.3.0 手势参数（gInvert 由 switchRow 独立写入）
-            .putFloat("gThreshold", 0.05f + sbGThresh.progress / 100f)
-            .putFloat("gSwipeLen", 0.15f + sbGLen.progress / 100f)
-            .putInt("gSwipeMs", 120 + sbGMs.progress)
-            .putFloat("gTapX", 0.02f + sbGTapX.progress / 100f)
-            .putFloat("gTapY", 0.02f + sbGTapY.progress / 100f)
+            // v2.4.0 手势参数（invertSwipe 由 switchRow 独立写入）
+            .putFloat("threshold", 0.05f + sbGThresh.progress / 100f)
+            .putFloat("swipeLength", 0.15f + sbGLen.progress / 100f)
+            .putInt("swipeMs", 120 + sbGMs.progress)
+            .putFloat("tapX", 0.05f + sbGTapX.progress / 100f)
+            .putFloat("tapY", 0.05f + sbGTapY.progress / 100f)
             .putString(
                 "channel",
                 when (rgChannel.checkedRadioButtonId) {
