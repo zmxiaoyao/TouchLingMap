@@ -79,6 +79,7 @@ class EvdevTouch(
                 var pendX = -1f
                 var pendY = -1f
                 var wantDown = false
+                var down = false // v2.4.6：当前是否已发出 DOWN（状态机自动补齐，兼容不标准触摸协议）
                 val reader = br
                 while (running) {
                     val line = reader.readLine() ?: break
@@ -92,22 +93,30 @@ class EvdevTouch(
                         }
                         line == "B 1" -> {
                             if (pendX >= 0 && pendY >= 0) {
-                                emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                                if (!down) {
+                                    emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                                    down = true
+                                }
                             } else {
                                 wantDown = true
                             }
                         }
                         line == "B 0" -> {
                             wantDown = false
-                            if (pendX >= 0 && pendY >= 0) {
-                                emit(MotionEvent.ACTION_UP, pendX, pendY)
+                            if (down) {
+                                if (pendX >= 0 && pendY >= 0) {
+                                    emit(MotionEvent.ACTION_UP, pendX, pendY)
+                                }
+                                down = false
                             }
                         }
                         line == "S" -> {
                             if (pendX >= 0 && pendY >= 0) {
-                                if (wantDown) {
+                                if (wantDown || !down) {
+                                    // v2.4.6：若设备不发 B 事件，第一帧 SYN 时自动补一个 DOWN
                                     wantDown = false
                                     emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                                    down = true
                                 } else {
                                     emit(MotionEvent.ACTION_MOVE, pendX, pendY)
                                 }
@@ -123,14 +132,18 @@ class EvdevTouch(
                             if (v >= 0) pendY = v.toFloat()
                         }
                         line.contains("BTN_TOUCH") && line.contains("DOWN") -> {
-                            if (pendX >= 0 && pendY >= 0) emit(
-                                MotionEvent.ACTION_DOWN, pendX, pendY
-                            )
+                            if (pendX >= 0 && pendY >= 0 && !down) {
+                                emit(MotionEvent.ACTION_DOWN, pendX, pendY)
+                                down = true
+                            }
                         }
                         line.contains("BTN_TOUCH") && line.contains("UP") -> {
-                            if (pendX >= 0 && pendY >= 0) emit(
-                                MotionEvent.ACTION_UP, pendX, pendY
-                            )
+                            if (down) {
+                                if (pendX >= 0 && pendY >= 0) {
+                                    emit(MotionEvent.ACTION_UP, pendX, pendY)
+                                }
+                                down = false
+                            }
                         }
                         line.contains("SYN_REPORT") -> {
                             if (pendX >= 0 && pendY >= 0) emit(
