@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -20,8 +19,13 @@ import android.view.Display
 import android.widget.Toast
 
 /**
- * 前台服务：持有 MediaProjection，把主屏画面投到背屏 Presentation 上
- * 并持有注入器（Root / Shizuku 自动或按设置选择）供触控注入。
+ * v0.3.0 前台服务（参考 MRSS / Mirror2RearUltra 重构）：
+ * - MediaProjection 会话持有（静态桥接给 RearActivity）
+ * - 通过注入器 shell 执行：
+ *     ① am force-stop com.xiaomi.subscreencenter（处刑 + keeper 持续杀死）
+ *     ② am start --display <背屏id> -n .../.RearActivity（拉起背屏镜像 Activity 并点火）
+ * - 停止时 monkey 拉回官方背屏中心恢复现场
+ * - 会话守卫：旧投影的 onStop 不会误杀新会话
  */
 class MirrorService : Service() {
 
@@ -29,29 +33,34 @@ class MirrorService : Service() {
         private const val CHANNEL = "mirror_channel"
         private const val NOTIF_ID = 10
 
+        /** RearActivity 静态桥 */
+        @Volatile var projection: MediaProjection? = null
+        @Volatile var injectorInstance: Injector? = null
+
         fun stop(c: Context) {
+            Diag.log("外部请求 stop")
             c.startService(Intent(c, MirrorService::class.java).apply { action = "stop" })
         }
     }
 
-    private var projection: MediaProjection? = null
-    private var vdisplay: VirtualDisplay? = null
-    private var presentation: MirrorPresentation? = null
-    private var injector: Injector? = null
     private var tornDown = false
+    private var sessionMp: MediaProjection? = null
+    private var keeper: Thread? = null
+    @Volatile private var keeperRunning = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        // 注入器在 startProjection 中按通道惰性创建（可随设置切换而重建）
+        Diag.init(applicationContext)
+        Diag.log("MirrorService onCreate pid=${android.os.Process.myPid()}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Diag.log("onStartCommand action=${intent?.action}")
         when (intent?.action) {
             "start" -> {
-                // 修复：重复启动前先释放旧的 Presentation/VirtualDisplay/Projection
                 teardown()
                 tornDown = false
                 startAsForeground()
@@ -63,6 +72,7 @@ class MirrorService : Service() {
                     intent.getParcelableExtra("resultData")
                 }
                 if (data == null) {
+                    Diag.log("resultData 为空 → stopSelf")
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -94,97 +104,123 @@ class MirrorService : Service() {
     }
 
     private fun startProjection(code: Int, data: Intent) {
+        // 1. 投影会话
         val mpm = getSystemService(MediaProjectionManager::class.java)
         val mp = try {
             mpm.getMediaProjection(code, data)
         } catch (t: Throwable) {
+            Diag.log("getMediaProjection 抛异常: $t")
             null
         }
         if (mp == null) {
+            Diag.log("mp=null → stopSelf")
             toast("获取 MediaProjection 失败")
             stopSelf()
             return
         }
-        projection = mp
+        sessionMp = mp
+        val selfMp = mp
         mp.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                mainHandler.post { teardown(); stopSelf() }
+                Diag.log("MediaProjection.onStop 回调")
+                mainHandler.post {
+                    // 会话守卫：只处理自己的会话（防旧回调杀新会话）
+                    if (projection === selfMp) {
+                        Diag.log("会话 onStop → teardown+stopSelf")
+                        teardown()
+                        stopSelf()
+                    } else {
+                        Diag.log("忽略过期会话 onStop")
+                    }
+                }
             }
         }, mainHandler)
+        projection = mp
 
-        // 找背屏：非默认显示屏、且不是自己创建的虚拟屏
+        // 2. 枚举并找背屏
         val dm = getSystemService(DisplayManager::class.java)
-        val back = dm.displays.firstOrNull {
+        val all = dm.displays
+        for (d in all) Diag.log("Display id=${d.displayId} name=${d.name} state=${d.state}")
+        val back = all.firstOrNull {
             it.displayId != Display.DEFAULT_DISPLAY && it.name != "touchling_mirror"
         }
         if (back == null) {
+            Diag.log("未找到背屏 → stopSelf")
             toast("未检测到背屏（背屏是否已唤醒？）")
             mp.stop()
             stopSelf()
             return
         }
-        toast("已找到背屏：${back.name}")
 
+        // 3. 注入通道（Root / Shizuku）
         val cfg = Cfg.load(this)
-        // 按通道偏好创建/切换注入器（设置改了也能在下次开始时生效）
         val wantRoot = when (cfg.channel) {
             Injector.CH_ROOT -> true
             Injector.CH_SHIZUKU -> false
             else -> Injector.rootAvailable()
         }
-        val cur = injector
+        val cur = injectorInstance
         val inj: Injector = if (cur != null && (cur is RootInjector) == wantRoot) {
-            cur.start(); cur
+            cur
         } else {
             try { cur?.close() } catch (_: Throwable) {}
-            val fresh: Injector = if (wantRoot) RootInjector() else ShizukuInjector()
-            fresh.start()
-            injector = fresh
-            fresh
+            if (wantRoot) RootInjector() else ShizukuInjector()
         }
-        if (!inj.start()) {
-            toast("注入通道未就绪（通道：${cfg.channel}）——镜像可用，但触摸不会生效")
-        }
+        val ready = inj.start()
+        injectorInstance = inj
+        Diag.log("注入器=${inj.javaClass.simpleName} ready=$ready channel=${cfg.channel}")
 
-        val p = MirrorPresentation(this, back, inj, cfg)
-        presentation = p
-        p.onSurfaceReady = { surface ->
-            val m = resources.displayMetrics
-            vdisplay = mp.createVirtualDisplay(
-                "touchling_mirror",
-                m.widthPixels, m.heightPixels, m.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                surface, null, null
-            )
-            if (vdisplay == null) toast("VirtualDisplay 创建失败")
+        // 4. 处刑背屏中心 + keeper 持续杀死（MRSS 技巧）
+        keeperRunning = true
+        keeper = Thread {
+            while (keeperRunning) {
+                try { inj.send("am force-stop com.xiaomi.subscreencenter") } catch (_: Throwable) {}
+                try { Thread.sleep(2500) } catch (_: Throwable) { break }
+            }
+        }.apply {
+            isDaemon = true
+            name = "subcenter-keeper"
+            start()
         }
-        p.onDismissed = {
-            mainHandler.post { teardown(); stopSelf() }
+        Diag.log("keeper 线程已启动")
+
+        // 5. 拉起背屏镜像 Activity（shell 启动绕过 BAL 限制）
+        val dispId = back.displayId
+        inj.send("am start --display $dispId -n com.touchling.mapper/.RearActivity")
+        Diag.log("已发送 am start --display $dispId")
+
+        if (!ready) {
+            toast("注入通道未就绪——镜像可用，但触摸不会生效")
         }
-        p.show()
     }
 
     private fun teardown() {
         if (tornDown) return
         tornDown = true
-        try { vdisplay?.release() } catch (_: Throwable) {}
-        vdisplay = null
-        try { presentation?.onDismissed = null } catch (_: Throwable) {}
-        try { presentation?.dismiss() } catch (_: Throwable) {}
-        presentation = null
-        try { projection?.stop() } catch (_: Throwable) {}
+        Diag.log("teardown 开始")
+        keeperRunning = false
+        keeper = null
+        // 恢复官方背屏中心
+        try {
+            injectorInstance?.send(
+                "monkey -p com.xiaomi.subscreencenter -c android.intent.category.LAUNCHER 1"
+            )
+        } catch (_: Throwable) {}
         projection = null
+        try { sessionMp?.stop() } catch (_: Throwable) {}
+        sessionMp = null
+        Diag.log("teardown 完成")
     }
 
     private fun toast(msg: String) {
-        mainHandler.post {
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-        }
+        mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
 
     override fun onDestroy() {
+        Diag.log("MirrorService onDestroy")
         teardown()
-        injector?.close()
+        try { injectorInstance?.close() } catch (_: Throwable) {}
+        injectorInstance = null
         super.onDestroy()
     }
 }
