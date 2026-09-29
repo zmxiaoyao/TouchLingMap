@@ -44,10 +44,18 @@ class MirrorService : Service() {
         /** v1.0.0：只把主题/玩具显示到背屏（不做触摸映射注入） */
         @Volatile var displayOnly = false
 
+        /** v2.0.0：免投屏（背屏黑屏当触控板，不申请屏幕捕获权限） */
+        @Volatile var noProjection = false
+
         fun stop(c: Context) {
             Diag.log("外部请求 stop")
             c.startService(Intent(c, MirrorService::class.java).apply { action = "stop" })
         }
+
+        /** v2.0.0：请求把光标拉回主屏中心（给 UI"光标回中"用） */
+        @Volatile var centerRequest = false
+        @Volatile var screenW = 0
+        @Volatile var screenH = 0
     }
 
     private var tornDown = false
@@ -74,6 +82,7 @@ class MirrorService : Service() {
                 tornDown = false
                 displayOnly = intent.getBooleanExtra("displayOnly", false)
                 val noProj = intent.getBooleanExtra("noProjection", false)
+                noProjection = noProj
                 Diag.log("displayOnly=$displayOnly noProjection=$noProj")
                 startAsForeground(noProj)
                 val code = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
@@ -169,12 +178,17 @@ class MirrorService : Service() {
             projection = mp
         }
 
-        // 2. 枚举并找背屏
+        // 2. 枚举并找背屏（v2.0.0：支持用户指定背屏 display id）
+        val cfg0 = Cfg.load(this)
         val dm = getSystemService(DisplayManager::class.java)
         val all = dm.displays
         for (d in all) Diag.log("Display id=${d.displayId} name=${d.name} state=${d.state}")
-        val back = all.firstOrNull {
-            it.displayId != Display.DEFAULT_DISPLAY && it.name != "touchling_mirror"
+        val back = if (cfg0.rearDisplayId >= 0) {
+            all.firstOrNull { it.displayId == cfg0.rearDisplayId }
+        } else {
+            all.firstOrNull {
+                it.displayId != Display.DEFAULT_DISPLAY && it.name != "touchling_mirror"
+            }
         }
         if (back == null) {
             Diag.log("未找到背屏 → stopSelf")
@@ -188,13 +202,13 @@ class MirrorService : Service() {
         val cfg = Cfg.load(this)
 
         // 3.5 主屏光标（v0.5.0）：触控板/体感模式 → 光标画在主屏，背屏当触控板
-        val mc = MainCursor(this, cfg.cursorStyle, cfg.cursorSizeIdx, cfg.cursorColor)
+        val mc = MainCursor(this, cfg.cursorStyle, cfg.cursorDp, cfg.cursorColor)
         mainCursor = mc
         if (!displayOnly && cfg.toy == 0 && cfg.htmlTheme == 0 && (cfg.mode == "pad" || cfg.gyro)) {
             if (mc.available) {
                 mc.show()
                 cursorSink = { x, y -> mc.move(x, y) }
-                Diag.log("主屏光标已启用（mode=${cfg.mode} gyro=${cfg.gyro}）")
+                Diag.log("主屏光标已启用（mode=${cfg.mode} gyro=${cfg.gyro} dp=${cfg.cursorDp}）")
             } else {
                 cursorSink = null
                 Diag.log("无悬浮窗权限 → 光标回退到背屏")
