@@ -43,39 +43,57 @@ class Cfg(
         get() = if (smoothMs <= 0) 1f else (16f / smoothMs.toFloat()).coerceIn(0.08f, 1f)
 
     companion object {
+        /** v2.2.2：带类型安全的读取（单项损坏只回退默认值，不再让整个进程崩掉） */
         fun load(ctx: Context): Cfg {
             val sp = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
-            val mode = sp.getString("mode", "direct") ?: "direct"
-            return Cfg(
+            var corrupted = false
+            fun b(k: String, d: Boolean) = try {
+                sp.getBoolean(k, d)
+            } catch (_: Throwable) { corrupted = true; d }
+            fun i(k: String, d: Int) = try {
+                sp.getInt(k, d)
+            } catch (_: Throwable) { corrupted = true; d }
+            fun f(k: String, d: Float) = try {
+                sp.getFloat(k, d)
+            } catch (_: Throwable) { corrupted = true; d }
+            fun s(k: String, d: String) = try {
+                sp.getString(k, d) ?: d
+            } catch (_: Throwable) { corrupted = true; d }
+
+            val mode = s("mode", "direct")
+            val cfg = Cfg(
                 mode,
-                sp.getFloat("sens", 1f),
-                sp.getInt("mask", 0),
-                sp.getString("channel", "auto") ?: "auto",
+                f("sens", 1f),
+                i("mask", 0),
+                s("channel", "auto"),
                 // v2.1.0：模式=体感光标 时强制开启体感
-                sp.getBoolean("gyro", false) || mode == "gyro",
-                sp.getBoolean("scroll2", true),
-                sp.getBoolean("invX", false),
-                sp.getBoolean("invY", false),
-                sp.getInt("cursorStyle", 2),
-                sp.getInt("cursorSizeIdx", 1),
-                sp.getInt("cursorColor", 0),
-                sp.getInt("rearBg", 0),
-                sp.getInt("toy", 0),
-                sp.getInt("htmlTheme", 0),
-                sp.getBoolean("noMirror", false),
-                sp.getInt("smoothMs", 0),
-                sp.getFloat("deadZone", 0.02f),
-                sp.getInt("cursorDp", 26),
-                sp.getInt("rearRot", 0),
-                sp.getFloat("gyroCalX", 0f),
-                sp.getFloat("gyroCalY", 0f),
-                sp.getInt("rearDisplayId", -1),
-                sp.getBoolean("evdev", false),
-                sp.getBoolean("bootAuto", false),
-                sp.getBoolean("autoApp", false),
-                sp.getString("autoApps", "") ?: "",
-                sp.getBoolean("ballOn", false)
+                b("gyro", false) || mode == "gyro",
+                b("scroll2", true),
+                // v2.2.2：默认值对齐「妙妙背屏」—— 免投屏 ON、evdev ON、X 反转 ON
+                b("invX", true),
+                b("invY", false),
+                i("cursorStyle", 2),
+                i("cursorSizeIdx", 1),
+                i("cursorColor", 0),
+                i("rearBg", 0),
+                i("toy", 0),
+                i("htmlTheme", 0),
+                b("noMirror", true),
+                i("smoothMs", 0),
+                f("deadZone", 0.02f),
+                i("cursorDp", 26),
+                i("rearRot", 0),
+                f("gyroCalX", 0f),
+                f("gyroCalY", 0f),
+                i("rearDisplayId", -1),
+                b("evdev", true),
+                b("bootAuto", false),
+                b("autoApp", false),
+                s("autoApps", ""),
+                b("ballOn", false)
             )
+            if (corrupted) Diag.log("Cfg.load: 存在类型损坏的配置项，已回退默认值")
+            return cfg
         }
     }
 }
