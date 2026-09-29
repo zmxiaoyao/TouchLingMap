@@ -1,5 +1,7 @@
 package com.touchling.mapper
 
+import java.io.InputStream
+
 /**
  * 统一触控注入接口。
  * 两个通道（Root / Shizuku）都持有常驻 shell，逐行执行 input 命令。
@@ -12,6 +14,9 @@ interface Injector {
 
     /** 独立进程执行命令并回读输出（用于搬运任务等关键命令，失败可见） */
     fun exec(cmd: String): String
+
+    /** v2.2.0：启动长驻进程并返回 stdout 流（evdev 直读背屏触摸用） */
+    fun spawn(cmd: String): SpawnedProcess? = null
 
     fun down(x: Float, y: Float) =
         send("/system/bin/input motionevent DOWN ${x.toInt()} ${y.toInt()}")
@@ -53,6 +58,20 @@ interface Injector {
             CH_ROOT -> RootInjector()
             CH_SHIZUKU -> ShizukuInjector()
             else -> if (rootAvailable()) RootInjector() else ShizukuInjector()
+        }
+    }
+}
+
+/** v2.2.0：长驻进程句柄（evdev 流式读取），用完 close() */
+class SpawnedProcess(val stream: InputStream, private val closer: () -> Unit) {
+    fun close() {
+        try {
+            closer()
+        } catch (_: Throwable) {
+        }
+        try {
+            stream.close()
+        } catch (_: Throwable) {
         }
     }
 }
