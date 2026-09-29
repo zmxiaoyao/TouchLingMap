@@ -43,6 +43,16 @@ class RootInjector : Injector {
         "EXEC_ERR:$t"
     }
 
+    /** v2.2.0：长驻进程（evdev 流式读取） */
+    override fun spawn(cmd: String): SpawnedProcess? {
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            SpawnedProcess(p.inputStream) { p.destroy() }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     private fun drain(input: InputStream) {
         Thread {
             try {
@@ -51,7 +61,6 @@ class RootInjector : Injector {
             } catch (_: Throwable) {}
         }.apply { isDaemon = true }.start()
     }
-
     private fun ensure(): OutputStreamWriter? {
         writer?.let { return it }
         if (System.currentTimeMillis() - lastTry < 1500) return null
