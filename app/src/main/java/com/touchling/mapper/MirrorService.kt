@@ -283,9 +283,12 @@ class MirrorService : Service() {
         }
 
         mainHandler.postDelayed({
-            if (projection == null) return@postDelayed
-            Thread {
-                try { Thread.sleep(700) } catch (_: Throwable) {}
+            // v2.2.1：免投屏模式没有投影会话，也要走"点亮+搬运"（否则黑屏卡在主屏）
+        if (projection == null && !noProjection) return@postDelayed
+        Thread {
+            try {
+                Thread.sleep(if (noProjection) 150 else 700)
+            } catch (_: Throwable) {}
                 val tid = RearActivity.lastTaskId
                 Diag.log("搬运前 taskId=$tid arrived=${RearActivity.arrived}")
                 if (tid <= 0) {
@@ -306,30 +309,44 @@ class MirrorService : Service() {
                 }
                 Diag.log("搬运结束 arrived=${RearActivity.arrived} alive=${RearActivity.alive}")
             }.apply { isDaemon = true }.start()
-        }, 800)
+        }, if (noProjection) 300 else 800)
 
         if (!ready) {
             toast("注入通道未就绪——镜像可用，但触摸不会生效")
         }
 
-        // v2.2.0 evdev 直读背屏触摸（免投屏 + 精密触控板 时启用，背屏视图退居"防误触"）
-        if (cfg.evdev && cfg.noMirror && !displayOnly && cfg.mode == "pad") {
-            val targetX = back.mode.physicalWidth * 100 - 1
-            val dev = EvdevTouch.detectDevice({ c -> inj.exec(c) }, targetX)
-            if (dev == null) {
-                Diag.log("evdev: 未找到匹配背屏宽度($targetX) 的触摸设备")
-            } else {
-                val dm = resources.displayMetrics
-                val m = TouchMapper(inj, cfg, dm.widthPixels, dm.heightPixels) { x, y, _ ->
-                    cursorSink?.invoke(x, y)
+        // v2.2.1 evdev 直读（放宽：镜像/免投屏 均可；灵触/触控板 均可；体感暂不支持并写明原因）
+        when {
+            !cfg.evdev -> {}
+            displayOnly -> Diag.log("evdev 跳过：只显示模式（无触摸映射）")
+            cfg.mode == "gyro" ->
+                Diag.log("evdev 跳过：体感光标模式暂不支持直读（请改用灵触映射或精密触控板）")
+            cfg.mode != "pad" && cfg.mode != "direct" ->
+                Diag.log("evdev 跳过：未知模式 ${cfg.mode}")
+            else -> {
+                if (cfg.mode == "pad" && cursorSink == null) {
+                    Diag.log("evdev 警告：无悬浮窗权限 → 光标不会移动（请授予「显示在其他应用上层」）")
                 }
-                evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
-                evdev?.start(
-                    dev,
-                    back.mode.physicalWidth * 100 - 1,
-                    back.mode.physicalHeight * 100 - 1
-                )
-                Diag.log("evdev 直读已启动 dev=$dev")
+                val targetX = back.mode.physicalWidth * 100 - 1
+                val dev = EvdevTouch.detectDevice({ c -> inj.exec(c) }, targetX)
+                if (dev == null) {
+                    Diag.log("evdev: 未找到匹配背屏宽度($targetX) 的触摸设备")
+                } else {
+                    val dm = resources.displayMetrics
+                    val m = TouchMapper(inj, cfg, dm.widthPixels, dm.heightPixels) { x, y, _ ->
+                        cursorSink?.invoke(x, y)
+                    }
+                    evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
+                    evdev?.start(
+                        dev,
+                        back.mode.physicalWidth * 100 - 1,
+                        back.mode.physicalHeight * 100 - 1
+                    )
+                    Diag.log(
+                        "evdev 直读已启动 dev=$dev mode=${cfg.mode} " +
+                            "noMirror=${cfg.noMirror} noProjection=$noProjection"
+                    )
+                }
             }
         }
 
