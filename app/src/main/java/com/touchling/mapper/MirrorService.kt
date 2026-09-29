@@ -150,9 +150,12 @@ class MirrorService : Service() {
                 Diag.log("startForeground 失败: $t2")
             }
         }
+        Diag.log("startForeground 调用完成（specialUse=$specialUse）")
     }
 
     private fun startProjection(code: Int, data: Intent?, noProj: Boolean) {
+        // v2.2.2：整段兜底，任何异常写日志而不是让进程静默死亡
+        try {
         // 1. 投影会话（noProjection 模式：只显示主题/玩具，完全不需要投屏授权）
         if (noProj) {
             Diag.log("noProjection 模式：跳过投屏会话（主题/玩具不需要）")
@@ -196,6 +199,7 @@ class MirrorService : Service() {
         }
 
         // 2. 枚举并找背屏（v2.0.0：支持用户指定背屏 display id）
+        Diag.log("步骤2：枚举显示器（startProjection 正常进行中）")
         val cfg0 = Cfg.load(this)
         val dm = getSystemService(DisplayManager::class.java)
         val all = dm.displays
@@ -270,26 +274,48 @@ class MirrorService : Service() {
         }
         Diag.log("keeper 线程已启动")
 
-        // 5. 背屏投放（v0.4.0）：主屏隐形启动 RearActivity → shell 搬运任务（带重试与可见日志）
+        // 5. 背屏投放（v2.2.2）：优先 shell `am start --display` 直投背屏（不遮挡当前软件，体验同妙妙）
         val dispId = back.displayId
-        try {
-            startActivity(
-                Intent(this, RearActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            Diag.log("主屏启动 RearActivity（隐形）")
-        } catch (t: Throwable) {
-            Diag.log("启动 RearActivity 失败: $t")
-        }
-
         mainHandler.postDelayed({
             // v2.2.1：免投屏模式没有投影会话，也要走"点亮+搬运"（否则黑屏卡在主屏）
-        if (projection == null && !noProjection) return@postDelayed
-        Thread {
-            try {
-                Thread.sleep(if (noProjection) 150 else 700)
-            } catch (_: Throwable) {}
-                val tid = RearActivity.lastTaskId
+            if (projection == null && !noProjection) return@postDelayed
+            Thread {
+                try {
+                    Thread.sleep(if (noProjection) 150 else 700)
+                } catch (_: Throwable) {
+                }
+                // —— 直投背屏（失败回退"主屏启动 + 搬运"）——
+                val shOut = try {
+                    inj.exec("am start --display $dispId -n com.touchling.mapper/.RearActivity")
+                } catch (t: Throwable) {
+                    "ERR:$t"
+                }
+                val directOk = shOut.contains("Starting") || shOut.contains("Intent")
+                Diag.log("--display 直投 display=$dispId ok=$directOk out=${shOut.take(90)}")
+                if (!directOk) {
+                    mainHandler.post {
+                        try {
+                            startActivity(
+                                Intent(this, RearActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                            Diag.log("回退：主屏启动 RearActivity（隐形）")
+                        } catch (t: Throwable) {
+                            Diag.log("启动 RearActivity 失败: $t")
+                        }
+                    }
+                }
+                // 等 onCreate 写入 taskId（最多 2s）
+                var tid = RearActivity.lastTaskId
+                var waited = 0
+                while (tid <= 0 && waited < 2000) {
+                    try {
+                        Thread.sleep(100)
+                    } catch (_: Throwable) {
+                    }
+                    waited += 100
+                    tid = RearActivity.lastTaskId
+                }
                 Diag.log("搬运前 taskId=$tid arrived=${RearActivity.arrived}")
                 if (tid <= 0) {
                     Diag.log("无 taskId，放弃搬运")
@@ -396,6 +422,11 @@ class MirrorService : Service() {
             start()
         }
         Diag.log("看门狗已启动")
+        } catch (t: Throwable) {
+            Diag.log("startProjection 异常: ${t.stackTraceToString()}")
+            toast("启动异常：${t.message}")
+            stopSelf()
+        }
     }
 
     private fun teardown() {
