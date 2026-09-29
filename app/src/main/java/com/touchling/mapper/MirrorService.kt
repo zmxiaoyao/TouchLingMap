@@ -380,7 +380,14 @@ class MirrorService : Service() {
                     Diag.log("evdev: 未找到匹配背屏宽度($targetX) 的触摸设备")
                 } else {
                     val dm = resources.displayMetrics
-                    val m = TouchMapper(inj, cfg, dm.widthPixels, dm.heightPixels) { x, y, _ ->
+                    // v2.4.4：真实屏幕尺寸（与参考实现 getRealSize 一致），避免全屏应用（如抖音）坐标偏移
+                    val pt = android.graphics.Point()
+                    getSystemService(android.hardware.display.DisplayManager::class.java)
+                        .getDisplay(android.view.Display.DEFAULT_DISPLAY)?.getRealSize(pt)
+                    val realW = if (pt.x > 0) pt.x else dm.widthPixels
+                    val realH = if (pt.y > 0) pt.y else dm.heightPixels
+                    Diag.log("触摸映射坐标系: ${realW} x ${realH}")
+                    val m = TouchMapper(inj, cfg, realW, realH) { x, y, _ ->
                         cursorSink?.invoke(x, y)
                     }
                     evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
