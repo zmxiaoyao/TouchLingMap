@@ -47,6 +47,21 @@ class MirrorService : Service() {
         /** v2.0.0：免投屏（背屏黑屏当触控板，不申请屏幕捕获权限） */
         @Volatile var noProjection = false
 
+        /** v2.2.0：服务是否在运行（给磁贴/悬浮球/自动启停用） */
+        @Volatile var running = false
+
+        /** v2.2.0：一键快速启动（免投屏触控，不需要屏幕捕获权限） */
+        fun startQuick(c: Context) {
+            Diag.log("startQuick（免投屏）")
+            c.startForegroundService(
+                Intent(c, MirrorService::class.java).apply {
+                    action = "start"
+                    putExtra("displayOnly", false)
+                    putExtra("noProjection", true)
+                }
+            )
+        }
+
         fun stop(c: Context) {
             Diag.log("外部请求 stop")
             c.startService(Intent(c, MirrorService::class.java).apply { action = "stop" })
@@ -64,12 +79,14 @@ class MirrorService : Service() {
     @Volatile private var keeperRunning = false
     private var watchdog: Thread? = null
     @Volatile private var watchdogRunning = false
+    private var evdev: EvdevTouch? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        running = true
         Diag.init(applicationContext)
         Diag.log("MirrorService onCreate pid=${android.os.Process.myPid()}")
     }
@@ -295,6 +312,27 @@ class MirrorService : Service() {
             toast("注入通道未就绪——镜像可用，但触摸不会生效")
         }
 
+        // v2.2.0 evdev 直读背屏触摸（免投屏 + 精密触控板 时启用，背屏视图退居"防误触"）
+        if (cfg.evdev && cfg.noMirror && !displayOnly && cfg.mode == "pad") {
+            val targetX = back.mode.physicalWidth * 100 - 1
+            val dev = EvdevTouch.detectDevice({ c -> inj.exec(c) }, targetX)
+            if (dev == null) {
+                Diag.log("evdev: 未找到匹配背屏宽度($targetX) 的触摸设备")
+            } else {
+                val dm = resources.displayMetrics
+                val m = TouchMapper(inj, cfg, dm.widthPixels, dm.heightPixels) { x, y, _ ->
+                    cursorSink?.invoke(x, y)
+                }
+                evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
+                evdev?.start(
+                    dev,
+                    back.mode.physicalWidth * 100 - 1,
+                    back.mode.physicalHeight * 100 - 1
+                )
+                Diag.log("evdev 直读已启动 dev=$dev")
+            }
+        }
+
         // 4.5 背屏看门狗（v1.3.0）：背屏息屏会休眠，任务会被退回主屏 → 自动点亮 + 重新搬运
         watchdogRunning = true
         watchdog = Thread {
@@ -351,6 +389,11 @@ class MirrorService : Service() {
         keeper = null
         watchdogRunning = false
         watchdog = null
+        try {
+            evdev?.stop()
+        } catch (_: Throwable) {
+        }
+        evdev = null
         // 收起主屏光标
         cursorSink = null
         try { mainCursor?.hide() } catch (_: Throwable) {}
@@ -372,6 +415,7 @@ class MirrorService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         Diag.log("MirrorService onDestroy")
         teardown()
         try { injectorInstance?.close() } catch (_: Throwable) {}
