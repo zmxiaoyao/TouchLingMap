@@ -170,12 +170,17 @@ class MirrorService : Service() {
         injectorInstance = inj
         Diag.log("注入器=${inj.javaClass.simpleName} ready=$ready channel=${cfg.channel}")
 
-        // 4. 处刑背屏中心 + keeper 持续杀死（MRSS 技巧）
+        // 4. 处刑背屏中心：keeper 线程用独立进程执行（失败可见）
         keeperRunning = true
         keeper = Thread {
+            var logged = false
             while (keeperRunning) {
-                try { inj.send("am force-stop com.xiaomi.subscreencenter") } catch (_: Throwable) {}
-                try { Thread.sleep(2500) } catch (_: Throwable) { break }
+                val out = inj.exec("am force-stop com.xiaomi.subscreencenter")
+                if (!logged && (out.contains("EXEC_ERR") || out.contains("DOWN"))) {
+                    Diag.log("keeper 异常: $out")
+                    logged = true
+                }
+                try { Thread.sleep(4000) } catch (_: Throwable) { break }
             }
         }.apply {
             isDaemon = true
@@ -184,33 +189,43 @@ class MirrorService : Service() {
         }
         Diag.log("keeper 线程已启动")
 
-        // 5. 背屏投放（v0.3.2 方案，参考 MRSS）：
-        //    HyperOS 禁止 startActivity 直接上背屏（launchDisplayId 会被拒），
-        //    因此：先在本屏正常启动 RearActivity，再由 shell 用
-        //    `service call activity_task 50` 把它的任务整体搬到背屏。
+        // 5. 背屏投放（v0.4.0）：主屏隐形启动 RearActivity → shell 搬运任务（带重试与可见日志）
         val dispId = back.displayId
         try {
             startActivity(
                 Intent(this, RearActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-            Diag.log("已在主屏启动 RearActivity（等待搬运）")
+            Diag.log("主屏启动 RearActivity（隐形）")
         } catch (t: Throwable) {
-            Diag.log("主屏启动 RearActivity 失败: $t")
+            Diag.log("启动 RearActivity 失败: $t")
         }
 
         mainHandler.postDelayed({
             if (projection == null) return@postDelayed
-            val logPath = "/sdcard/Download/背屏映射/amstart.log"
-            val cmd = "tid=\$(cat /sdcard/Android/data/com.touchling.mapper/files/taskid.txt 2>/dev/null); " +
-                "echo \"taskId=\$tid\" > $logPath; " +
-                "if [ -n \"\$tid\" ]; then " +
-                "am display move-stack \$tid $dispId >> $logPath 2>&1; " +
-                "sleep 1; dumpsys activity activities | grep -m2 RearActivity >> $logPath 2>&1; " +
-                "else echo 'taskid.txt 缺失' >> $logPath; fi"
-            inj.send(cmd)
-            Diag.log("已发送搬任务命令 → display=$dispId")
-        }, 900)
+            Thread {
+                try { Thread.sleep(700) } catch (_: Throwable) {}
+                val tid = RearActivity.lastTaskId
+                Diag.log("搬运前 taskId=$tid arrived=${RearActivity.arrived}")
+                if (tid <= 0) {
+                    Diag.log("无 taskId，放弃搬运")
+                    return@Thread
+                }
+                // 点亮背屏（MIUI 私有电源事务，参考 Mirror2RearUltra）
+                val wake = inj.exec(
+                    "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
+                        "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
+                )
+                Diag.log("点亮背屏: ${wake.ifBlank { "无输出" }}")
+                for (i in 1..3) {
+                    if (RearActivity.arrived) break
+                    val out = inj.exec("am display move-stack $tid $dispId")
+                    Diag.log("搬运#$i → display=$dispId: ${out.ifBlank { "OK" }}")
+                    try { Thread.sleep(1200) } catch (_: Throwable) {}
+                }
+                Diag.log("搬运结束 arrived=${RearActivity.arrived} alive=${RearActivity.alive}")
+            }.apply { isDaemon = true }.start()
+        }, 800)
 
         if (!ready) {
             toast("注入通道未就绪——镜像可用，但触摸不会生效")
