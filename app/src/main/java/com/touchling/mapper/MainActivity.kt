@@ -34,6 +34,13 @@ class MainActivity : Activity() {
     private lateinit var etModel: EditText
     private lateinit var tvAiStatus: TextView
 
+    // v0.9.0 分页 + 导航
+    private lateinit var pageHost: FrameLayout
+    private val pageViews = mutableListOf<View>()
+    private val navItems = mutableListOf<LinearLayout>()
+    private val navTvs = mutableListOf<Pair<TextView, TextView>>()
+    private var currentPage = -1
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sp = getSharedPreferences("cfg", MODE_PRIVATE)
@@ -179,26 +186,11 @@ class MainActivity : Activity() {
 
     private fun buildUi() {
         val pad = dp(20f)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
-            setBackgroundColor(0xFFF2F3F7.toInt())
-        }
-
-        // 头部
-        root.addView(TextView(this).apply {
-            text = "触灵映射"
-            textSize = 26f
-            setTextColor(0xFF111827.toInt())
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(0, dp(6f), 0, dp(2f))
-        })
-        root.addView(TextView(this).apply {
-            text = "小米背屏 → 主屏 · 映射控制台 v${appVersion()}"
-            textSize = 13f
-            setTextColor(0xFF8E8E93.toInt())
-            setPadding(0, 0, 0, dp(16f))
-        })
+        // v0.9.0：四个分页的内容容器（底部导航切换，不再是一条长滚动）
+        val page1 = pageContainer(pad)
+        val page2 = pageContainer(pad)
+        val page3 = pageContainer(pad)
+        val page4 = pageContainer(pad)
 
         // 状态卡
         val statusCard = card()
@@ -213,7 +205,7 @@ class MainActivity : Activity() {
         }
         statusCard.addView(tvStatus)
         statusCard.addView(tvDisplay)
-        root.addView(statusCard)
+        page1.addView(statusCard)
 
         // 快捷操作
         val actionCard = card()
@@ -234,7 +226,7 @@ class MainActivity : Activity() {
                 ).show()
             }
         })
-        root.addView(actionCard)
+        page1.addView(actionCard)
 
         // 样式 / 主题卡（v0.6.0）
         val styleCard = card()
@@ -258,7 +250,7 @@ class MainActivity : Activity() {
             setTextColor(0xFF9CA3AF.toInt())
             setPadding(0, dp(8f), 0, 0)
         })
-        root.addView(styleCard)
+        page2.addView(styleCard)
 
         // AI 主题工坊（v0.8.0）：用 AI 生成 HTML 主题，背屏用 WebView 渲染
         val aiCard = card()
@@ -295,7 +287,7 @@ class MainActivity : Activity() {
         aiCard.addView(tvAiStatus)
         aiCard.addView(sectionTitle("背屏主题渲染（HTML）"))
         aiCard.addView(optionRow("htmlTheme", 0, listOf("关闭", "内置示例", "我的AI主题")))
-        root.addView(aiCard)
+        page3.addView(aiCard)
 
         // 注入通道
         val channelCard = card()
@@ -312,7 +304,7 @@ class MainActivity : Activity() {
                 else -> 2001
             }
         )
-        root.addView(channelCard)
+        page4.addView(channelCard)
 
         // 映射设置
         val setCard = card()
@@ -340,7 +332,7 @@ class MainActivity : Activity() {
             progress = sp.getInt("mask", 0)
         }
         setCard.addView(sbMask)
-        root.addView(setCard)
+        page4.addView(setCard)
 
         // 特色功能
         val featCard = card()
@@ -357,10 +349,10 @@ class MainActivity : Activity() {
             isChecked = sp.getBoolean("scroll2", true)
         }
         featCard.addView(swScroll2)
-        root.addView(featCard)
+        page4.addView(featCard)
 
         // 提示
-        root.addView(TextView(this).apply {
+        page1.addView(TextView(this).apply {
             text = "首次使用：装 Shizuku（无线调试启动）→ 点「授权 Shizuku」\n" +
                 "点「开始映射」→ 同意投屏授权 → 自动处理背屏中心并点亮背屏\n" +
                 "灵触=背屏直接操作主屏；触控板=滑动移光标、轻点点击、停 0.4s 拖动\n" +
@@ -370,17 +362,159 @@ class MainActivity : Activity() {
             setPadding(dp(4f), dp(4f), dp(4f), dp(20f))
         })
 
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            addView(
-                root,
-                android.view.ViewGroup.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        // 组装：固定头部 + 分页区 + 底部液态玻璃导航（v0.9.0）
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFFF2F3F7.toInt())
+        }
+        shell.addView(buildHeader(pad))
+        pageHost = FrameLayout(this)
+        shell.addView(
+            pageHost,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+        pageViews.clear()
+        pageViews.add(makePage(page1))
+        pageViews.add(makePage(page2))
+        pageViews.add(makePage(page3))
+        pageViews.add(makePage(page4))
+        pageViews.forEach {
+            pageHost.addView(
+                it,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
                 )
             )
         }
-        setContentView(scroll)
+        shell.addView(buildNavBar())
+        setContentView(shell)
+        switchPage(0)
+    }
+
+    // ---------- 分页 / 液态玻璃导航（v0.9.0） ----------
+
+    private fun pageContainer(pad: Int): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(pad, dp(8f), pad, pad)
+    }
+
+    private fun makePage(content: LinearLayout): View = ScrollView(this).apply {
+        isFillViewport = true
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(
+            content,
+            android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+    }
+
+    private fun buildHeader(pad: Int): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(pad, pad, pad, dp(2f))
+        addView(TextView(this@MainActivity).apply {
+            text = "触灵映射"
+            textSize = 24f
+            setTextColor(0xFF111827.toInt())
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "小米背屏 → 主屏 · 控制台 v" + appVersion()
+            textSize = 12f
+            setTextColor(0xFF8E8E93.toInt())
+            setPadding(0, dp(2f), 0, dp(10f))
+        })
+    }
+
+    /** 底部「液态玻璃」导航栏：半透明渐变 + 高光描边 + 悬浮阴影 */
+    private fun buildNavBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xE61B1C20.toInt(), 0xB3131417.toInt())
+            ).apply {
+                cornerRadius = dp(26f).toFloat()
+                setStroke(dp(1f), 0x3DFFFFFF)
+            }
+            elevation = dp(12f).toFloat()
+            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+        }
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        lp.setMargins(dp(14f), dp(4f), dp(14f), dp(14f))
+        bar.layoutParams = lp
+
+        navItems.clear()
+        navTvs.clear()
+        val tabs = listOf(
+            "🎛" to "控制",
+            "🎨" to "样式",
+            "✨" to "AI 主题",
+            "⚙️" to "设置"
+        )
+        tabs.forEachIndexed { i, (icon, label) ->
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                )
+                setPadding(0, dp(6f), 0, dp(6f))
+                setOnClickListener { switchPage(i) }
+            }
+            val tvIcon = TextView(this).apply {
+                text = icon
+                textSize = 17f
+                gravity = Gravity.CENTER
+            }
+            val tvLabel = TextView(this).apply {
+                text = label
+                textSize = 11f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(2f), 0, 0)
+            }
+            item.addView(tvIcon)
+            item.addView(tvLabel)
+            navItems.add(item)
+            navTvs.add(tvIcon to tvLabel)
+            bar.addView(item)
+        }
+        return bar
+    }
+
+    private fun switchPage(index: Int) {
+        if (index == currentPage) return
+        currentPage = index
+        pageViews.forEachIndexed { i, v ->
+            v.visibility = if (i == index) View.VISIBLE else View.GONE
+        }
+        navItems.forEachIndexed { i, item ->
+            val on = i == index
+            item.background = if (on) {
+                GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0x4DFFFFFF, 0x1FFFFFFF)
+                ).apply {
+                    cornerRadius = dp(18f).toFloat()
+                    setStroke(dp(1f), 0x33FFFFFF)
+                }
+            } else {
+                GradientDrawable().apply { setColor(0x00000000) }
+            }
+            item.animate().scaleX(if (on) 1f else 0.94f)
+                .scaleY(if (on) 1f else 0.94f)
+                .setDuration(140).start()
+            navTvs.getOrNull(i)?.let { (icon, label) ->
+                icon.alpha = if (on) 1f else 0.6f
+                label.setTextColor(if (on) 0xFFFFFFFF.toInt() else 0x99FFFFFF.toInt())
+            }
+        }
     }
 
     // ---------- 逻辑 ----------
