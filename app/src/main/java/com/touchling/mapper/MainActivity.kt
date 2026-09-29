@@ -27,6 +27,13 @@ class MainActivity : Activity() {
     private lateinit var swGyro: android.widget.Switch
     private lateinit var swScroll2: android.widget.Switch
 
+    // v0.8.0 AI 主题工坊
+    private lateinit var etPrompt: EditText
+    private lateinit var etBase: EditText
+    private lateinit var etKey: EditText
+    private lateinit var etModel: EditText
+    private lateinit var tvAiStatus: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sp = getSharedPreferences("cfg", MODE_PRIVATE)
@@ -165,6 +172,11 @@ class MainActivity : Activity() {
 
     // ---------- 界面 ----------
 
+    private val AI_SYS = "你是背屏主题生成器。用户会描述想要的主题，你要输出一个完整的单文件 HTML（内联 CSS/JS），" +
+            "适配 976x596 的副屏，深色背景、触摸交互友好、不要外部资源。" +
+            "只输出 HTML 源码本身，不要 markdown 代码块，不要任何解释文字。" +
+            "页面中可用全局对象 TouchLing 调用原生能力：TouchLing.log(msg)、TouchLing.key(code)（3=主页 4=返回 187=多任务）、TouchLing.exec(cmd)。"
+
     private fun buildUi() {
         val pad = dp(20f)
         val root = LinearLayout(this).apply {
@@ -248,6 +260,43 @@ class MainActivity : Activity() {
         })
         root.addView(styleCard)
 
+        // AI 主题工坊（v0.8.0）：用 AI 生成 HTML 主题，背屏用 WebView 渲染
+        val aiCard = card()
+        aiCard.addView(sectionTitle("AI 主题工坊（HTML）"))
+        etPrompt = EditText(this).apply {
+            hint = "描述想要的主题，例如：赛博朋克风电子木鱼，带功德计数和霓虹光效"
+            textSize = 13f
+        }
+        etBase = EditText(this).apply {
+            hint = "API 地址（默认 OpenAI，可填兼容接口）"
+            textSize = 13f
+            setText(sp.getString("aiBase", "") ?: "")
+        }
+        etKey = EditText(this).apply {
+            hint = "API Key（留空则用内置示例主题）"
+            textSize = 13f
+            setText(sp.getString("aiKey", "") ?: "")
+        }
+        etModel = EditText(this).apply {
+            hint = "模型（默认 gpt-4o-mini）"
+            textSize = 13f
+            setText(sp.getString("aiModel", "") ?: "")
+        }
+        aiCard.addView(etPrompt)
+        aiCard.addView(etBase)
+        aiCard.addView(etKey)
+        aiCard.addView(etModel)
+        aiCard.addView(bigButton("✨ 用 AI 生成主题", 0xFF7C4DFF.toInt()) { aiGenerateTheme() })
+        tvAiStatus = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFF8E8E93.toInt())
+            setPadding(0, dp(4f), 0, dp(8f))
+        }
+        aiCard.addView(tvAiStatus)
+        aiCard.addView(sectionTitle("背屏主题渲染（HTML）"))
+        aiCard.addView(optionRow("htmlTheme", 0, listOf("关闭", "内置示例", "我的AI主题")))
+        root.addView(aiCard)
+
         // 注入通道
         val channelCard = card()
         channelCard.addView(sectionTitle("注入通道"))
@@ -321,7 +370,17 @@ class MainActivity : Activity() {
             setPadding(dp(4f), dp(4f), dp(4f), dp(20f))
         })
 
-        setContentView(root)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(
+                root,
+                android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        setContentView(scroll)
     }
 
     // ---------- 逻辑 ----------
@@ -379,6 +438,106 @@ class MainActivity : Activity() {
             sb.append("· id=${d.displayId}  ${d.name}  ${d.refreshRate.toInt()}Hz  state=${d.state}\n")
         }
         tvDisplay.text = sb.toString().trimEnd()
+    }
+
+    // ---------- AI 主题生成（v0.8.0） ----------
+
+    private fun aiGenerateTheme() {
+        val desc = etPrompt.text.toString().trim()
+        val base = etBase.text.toString().trim().ifBlank { "https://api.openai.com/v1" }
+        val key = etKey.text.toString().trim()
+        val model = etModel.text.toString().trim().ifBlank { "gpt-4o-mini" }
+        sp.edit()
+            .putString("aiBase", base)
+            .putString("aiKey", key)
+            .putString("aiModel", model)
+            .apply()
+        if (desc.isEmpty()) {
+            tvAiStatus.text = "请先描述你想要的主题"
+            return
+        }
+        if (key.isEmpty()) {
+            saveTheme(DefaultTheme.HTML)
+            sp.edit().putInt("htmlTheme", 2).apply()
+            persistCfg()
+            tvAiStatus.text = "未填 API Key → 已保存「内置示例主题」，并把背屏主题切到「我的AI主题」"
+            return
+        }
+        tvAiStatus.text = "生成中…（最长 2 分钟，请勿退出）"
+        Diag.log("AI 主题生成开始 model=$model base=$base")
+        Thread {
+            try {
+                val body = org.json.JSONObject().apply {
+                    put("model", model)
+                    put("temperature", 0.8)
+                    put(
+                        "messages", org.json.JSONArray().apply {
+                            put(
+                                org.json.JSONObject().apply {
+                                    put("role", "system")
+                                    put("content", AI_SYS)
+                                }
+                            )
+                            put(
+                                org.json.JSONObject().apply {
+                                    put("role", "user")
+                                    put("content", desc)
+                                }
+                            )
+                        }
+                    )
+                }
+                val conn = java.net.URL("$base/chat/completions")
+                    .openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 20000
+                conn.readTimeout = 120000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Authorization", "Bearer $key")
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val txt = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.readText() ?: ""
+                if (code !in 200..299) error("HTTP $code ${txt.take(160)}")
+                val content = org.json.JSONObject(txt)
+                    .getJSONArray("choices").getJSONObject(0)
+                    .getJSONObject("message").getString("content")
+                val html = extractHtml(content)
+                saveTheme(html)
+                sp.edit().putInt("htmlTheme", 2).apply()
+                Diag.log("AI 主题生成成功 ${html.length} 字符")
+                runOnUiThread {
+                    tvAiStatus.text = "✅ 已生成并保存（${html.length} 字符）→ 背屏主题已切到「我的AI主题」"
+                }
+            } catch (t: Throwable) {
+                Diag.log("AI 主题生成失败: $t")
+                runOnUiThread { tvAiStatus.text = "❌ 生成失败：${t.message?.take(120)}" }
+            }
+        }.start()
+    }
+
+    /** 从模型回复里抠出纯 HTML（去掉 markdown 代码块与多余说明） */
+    private fun extractHtml(s: String): String {
+        var t = s.trim()
+        if (t.startsWith("```")) {
+            t = t.removePrefix("```html").removePrefix("```HTML").removePrefix("```")
+            val e = t.lastIndexOf("```")
+            if (e >= 0) t = t.substring(0, e)
+        }
+        val h = t.indexOf("<!DOCTYPE", true).let { if (it >= 0) it else t.indexOf("<html", true) }
+        if (h > 0) t = t.substring(h)
+        return t.trim()
+    }
+
+    private fun saveTheme(html: String) {
+        try {
+            val dir = java.io.File(filesDir, "themes")
+            if (!dir.exists()) dir.mkdirs()
+            java.io.File(dir, "ai.html").writeText(html)
+        } catch (t: Throwable) {
+            Diag.log("保存主题失败: $t")
+        }
     }
 
     private fun startProjection() {
