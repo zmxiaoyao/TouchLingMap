@@ -18,23 +18,57 @@ interface Injector {
     /** v2.2.0：启动长驻进程并返回 stdout 流（evdev 直读背屏触摸用） */
     fun spawn(cmd: String): SpawnedProcess? = null
 
-    fun down(x: Float, y: Float) =
-        send("/system/bin/input motionevent DOWN ${x.toInt()} ${y.toInt()}")
+    /** v2.4.0：优先走实时触控桥（app_process 注入，丝滑），失败回退 input 命令 */
+    fun down(x: Float, y: Float) {
+        val xi = x.toInt()
+        val yi = y.toInt()
+        if (!Bridge.write("D $xi $yi")) {
+            send("/system/bin/input motionevent DOWN $xi $yi")
+        }
+    }
 
-    fun move(x: Float, y: Float) =
-        send("/system/bin/input motionevent MOVE ${x.toInt()} ${y.toInt()}")
+    fun move(x: Float, y: Float) {
+        val xi = x.toInt()
+        val yi = y.toInt()
+        if (!Bridge.write("M $xi $yi")) {
+            send("/system/bin/input motionevent MOVE $xi $yi")
+        }
+    }
 
-    fun up(x: Float, y: Float) =
-        send("/system/bin/input motionevent UP ${x.toInt()} ${y.toInt()}")
+    fun up(x: Float, y: Float) {
+        val xi = x.toInt()
+        val yi = y.toInt()
+        if (!Bridge.write("U $xi $yi")) {
+            send("/system/bin/input motionevent UP $xi $yi")
+        }
+    }
 
-    fun tap(x: Float, y: Float) = send(
-        "/system/bin/input motionevent DOWN ${x.toInt()} ${y.toInt()}; " +
-            "/system/bin/sleep 0.05; " +
-            "/system/bin/input motionevent UP ${x.toInt()} ${y.toInt()}"
-    )
+    fun tap(x: Float, y: Float) {
+        val xi = x.toInt()
+        val yi = y.toInt()
+        if (Bridge.ok && Bridge.write("D $xi $yi")) {
+            Thread {
+                try {
+                    Thread.sleep(60)
+                } catch (_: Throwable) {
+                }
+                Bridge.write("U $xi $yi")
+            }.apply { isDaemon = true }.start()
+            return
+        }
+        send(
+            "/system/bin/input motionevent DOWN $xi $yi; " +
+                "/system/bin/sleep 0.05; " +
+                "/system/bin/input motionevent UP $xi $yi"
+        )
+    }
 
     /** 注入按键（4=返回 3=Home 187=多任务 26=电源） */
-    fun key(code: Int) = send("/system/bin/input keyevent $code")
+    fun key(code: Int) {
+        if (!Bridge.write("K $code 0")) {
+            send("/system/bin/input keyevent $code")
+        }
+    }
 
     companion object {
         const val CH_AUTO = "auto"
