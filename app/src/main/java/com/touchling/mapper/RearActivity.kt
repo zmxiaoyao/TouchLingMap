@@ -100,7 +100,7 @@ val frame = BackFrame(this)
         // v0.8.0 HTML 主题模式：WebView 渲染（内置示例 / AI 生成）
         val htmlMode = cfg?.htmlTheme ?: 0
         if (htmlMode != 0) {
-            val wv = HtmlThemeView(this, htmlMode == 1, java.io.File(filesDir, "themes/ai.html"))
+            val wv = HtmlThemeView(this, htmlMode, java.io.File(filesDir, "themes/ai.html"))
             frame.addView(wv, FrameLayout.LayoutParams(-1, -1))
             setContentView(frame)
             applyWindowMode()
