@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- v0.5.0：主屏光标用悬浮窗绘制（触控板/体感模式，光标显示在主屏） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- v0.8.0：AI 生成 HTML 主题需要联网 -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="触灵映射"
