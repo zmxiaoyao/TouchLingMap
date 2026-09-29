@@ -163,7 +163,9 @@ val frame = BackFrame(this)
         frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
         // 背屏显示样式（v0.6.0）：0镜像 / 1纯黑 / 2网格
-        val rearBg = cfg?.rearBg ?: 0
+        // v2.0.0：免投屏模式下强制纯黑（背屏不需要显示主屏画面，省电且不烧屏）
+        val rearBg = if (MirrorService.noProjection) 1 else (cfg?.rearBg ?: 0)
+        Diag.log("背屏底色模式=$rearBg (noProjection=${MirrorService.noProjection})")
         if (rearBg != 0) {
             sv.visibility = View.GONE
             frame.setBackgroundColor(Color.BLACK)
@@ -336,11 +338,17 @@ val frame = BackFrame(this)
                 val t = SystemClock.uptimeMillis()
                 if (t - lastGyroT < 40) return
                 lastGyroT = t
-                // values: 0=pitch轴 1=roll轴 2=yaw轴（支持左右/上下反转）
+                // values: 0=pitch轴 1=roll轴 2=yaw轴（支持左右/上下反转 + 死区 + 校准）
                 val ix = if (cfg?.invX == true) -1f else 1f
                 val iy = if (cfg?.invY == true) -1f else 1f
-                val dx = -ev.values[2] * 14f * ix
-                val dy = -ev.values[0] * 14f * iy
+                val gz = cfg?.deadZone ?: 0f
+                val calX = cfg?.gyroCalX ?: 0f
+                val calY = cfg?.gyroCalY ?: 0f
+                val rvX = ev.values[2] - calX
+                val rvY = ev.values[0] - calY
+                if (kotlin.math.abs(rvX) < gz && kotlin.math.abs(rvY) < gz) return
+                val dx = -rvX * 14f * ix
+                val dy = -rvY * 14f * iy
                 gx = (gx + dx).coerceIn(0f, mainW - 1f)
                 gy = (gy + dy).coerceIn(0f, mainH - 1f)
                 moveCursorTo(gx, gy, true)
