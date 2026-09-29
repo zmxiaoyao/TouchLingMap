@@ -228,7 +228,11 @@ class MirrorService : Service() {
         if (!displayOnly && cfg.toy == 0 && cfg.htmlTheme == 0 && (cfg.mode == "pad" || cfg.gyro)) {
             if (mc.available) {
                 mc.show()
-                cursorSink = { x, y -> mc.move(x, y) }
+                cursorSink = { x, y ->
+                    gyroX = x
+                    gyroY = y
+                    mc.move(x, y)
+                }
                 Diag.log("主屏光标已启用（mode=${cfg.mode} gyro=${cfg.gyro} dp=${cfg.cursorDp}）")
             } else {
                 cursorSink = null
@@ -365,14 +369,13 @@ class MirrorService : Service() {
         when {
             !cfg.evdev -> {}
             displayOnly -> Diag.log("evdev 跳过：只显示模式（无触摸映射）")
-            cfg.mode == "gyro" ->
-                Diag.log("evdev 跳过：体感光标模式暂不支持直读（请改用灵触映射或精密触控板）")
+            cfg.mode == "gyro" -> Diag.log("evdev: 体感光标模式（陀螺仪移动光标 + 触摸点击/拖拽）")
             cfg.mode != "pad" && cfg.mode != "direct" && cfg.mode != "gesture" ->
                 Diag.log("evdev 跳过：未知模式 ${cfg.mode}")
             else -> {
-                if (cfg.mode == "pad" && cursorSink == null) {
+                if ((cfg.mode == "pad" || cfg.mode == "gyro") && cursorSink == null) {
                     Diag.log("evdev 警告：无悬浮窗权限 → 光标不会移动（请授予「显示在其他应用上层」）")
-                    toast("请授予「显示在其他应用上层」权限，触控板光标才能显示在主屏")
+                    toast("请授予「显示在其他应用上层」权限，触控板/体感光标才能显示在主屏")
                 }
                 val targetX = back.mode.physicalWidth * 100 - 1
                 val dev = EvdevTouch.detectDevice({ c -> inj.exec(c) }, targetX)
@@ -387,9 +390,10 @@ class MirrorService : Service() {
                     val realW = if (pt.x > 0) pt.x else dm.widthPixels
                     val realH = if (pt.y > 0) pt.y else dm.heightPixels
                     Diag.log("触摸映射坐标系: ${realW} x ${realH}")
-                    val m = TouchMapper(inj, cfg, realW, realH) { x, y, _ ->
+                    val m = TouchMapper(inj, cfg, realW, realH, { x, y, _ ->
                         cursorSink?.invoke(x, y)
-                    }
+                    }, { gyroX to gyroY })
+                    if (cfg.mode == "gyro") startGyroFeed(cfg)
                     evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
                     evdev?.start(
                         dev,
@@ -428,7 +432,7 @@ class MirrorService : Service() {
                                 "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                                     "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                             )
-                            inj.exec("cmd power set-wakelock acquire -d $dispId SCREEN_BRIGHT_WAKE_LOCK")
+                            acquireWakelockIfNeeded(inj, dispId)
                             inj.exec("cmd power wakeup --display-id $dispId")
                             Diag.log("看门狗重激活背屏: ${w.ifBlank { "OK" }}")
                         }
@@ -474,7 +478,7 @@ class MirrorService : Service() {
             Bridge.stop()
         } catch (_: Throwable) {
         }
-        // v2.4.2：释放按屏常亮锁 + 恢复背屏电源策略（参考实现同款收尾）
+        // v2.4.5：释放按屏常亮锁（循环释放至 held=false，修复 refCount 累积导致"停止后背屏仍常亮"）
         val rid = rearDispId
         if (rid > 0) {
             injectorInstance?.let { ii ->
@@ -483,13 +487,15 @@ class MirrorService : Service() {
                 } catch (_: Throwable) {
                 }
                 try {
-                    ii.exec("cmd power set-wakelock release -d $rid SCREEN_BRIGHT_WAKE_LOCK")
-                } catch (_: Throwable) {
+                    Diag.log("背屏常亮锁释放: ${releaseWakelockUntilFree(ii, rid)}")
+                } catch (t: Throwable) {
+                    Diag.log("背屏常亮锁释放异常: $t")
                 }
             }
             rearDispId = -1
         }
         removeKeepAlive()
+        stopGyroFeed()
         try {
             evdev?.stop()
         } catch (_: Throwable) {
@@ -527,6 +533,106 @@ class MirrorService : Service() {
      *   cmd power wakeup --display-id <id>                              ← 按屏唤醒
      * 仍未 ON 时回退 MIUI 电源事务兜底；结束时 set-wakelock release + power-reset 恢复。
      */
+    // ================= v2.4.5 体感光标（纯触控模式的服务级实现） =================
+    @Volatile
+    private var gyroX = -1f
+
+    @Volatile
+    private var gyroY = -1f
+
+    private var sensorManager: android.hardware.SensorManager? = null
+    private var gyroListener: android.hardware.SensorEventListener? = null
+    private var lastGyroT = 0L
+
+    /** v2.4.5：体感光标（陀螺仪驱动）。纯触控模式无背屏 Activity，需服务自己驱动 */
+    private fun startGyroFeed(cfg: Cfg) {
+        if (gyroListener != null) return
+        try {
+            val sm = getSystemService(android.hardware.SensorManager::class.java)
+            val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE)
+            if (sensor == null) {
+                Diag.log("体感: 设备无可用陀螺仪")
+                return
+            }
+            sensorManager = sm
+            val mw = resources.displayMetrics.widthPixels.toFloat()
+            val mh = resources.displayMetrics.heightPixels.toFloat()
+            if (gyroX < 0f) {
+                gyroX = mw / 2f
+                gyroY = mh / 2f
+            }
+            val listener = object : android.hardware.SensorEventListener {
+                override fun onSensorChanged(ev: android.hardware.SensorEvent) {
+                    // 有背屏 Activity 时由 Activity 驱动，避免双重移动
+                    if (RearActivity.alive) return
+                    val t = SystemClock.uptimeMillis()
+                    if (t - lastGyroT < 40) return
+                    lastGyroT = t
+                    val ix = if (cfg.invX) -1f else 1f
+                    val iy = if (cfg.invY) -1f else 1f
+                    val gz = cfg.deadZone
+                    val rvX = ev.values[2] - cfg.gyroCalX
+                    val rvY = ev.values[0] - cfg.gyroCalY
+                    if (kotlin.math.abs(rvX) < gz && kotlin.math.abs(rvY) < gz) return
+                    gyroX = (gyroX - rvX * 14f * ix).coerceIn(0f, mw - 1f)
+                    gyroY = (gyroY - rvY * 14f * iy).coerceIn(0f, mh - 1f)
+                    cursorSink?.invoke(gyroX, gyroY)
+                }
+
+                override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+            }
+            gyroListener = listener
+            sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+            Diag.log("体感光标已启动（服务级·陀螺仪驱动）")
+        } catch (t: Throwable) {
+            Diag.log("体感光标启动失败: $t")
+        }
+    }
+
+    private fun stopGyroFeed() {
+        val sm = sensorManager
+        val l = gyroListener
+        if (sm != null && l != null) {
+            try {
+                sm.unregisterListener(l)
+            } catch (_: Throwable) {
+            }
+        }
+        sensorManager = null
+        gyroListener = null
+    }
+
+    /** v2.4.5：确保按屏常亮锁处于持有状态（已持有则跳过，避免 refCount 累积导致释放不净） */
+    private fun acquireWakelockIfNeeded(inj: Injector, displayId: Int): String = try {
+        val held = inj.exec("cmd power set-wakelock list")
+            .lines()
+            .any {
+                it.contains("Display $displayId, wakelock type: SCREEN_BRIGHT_WAKE_LOCK") &&
+                    it.contains("held=true")
+            }
+        if (held) "已持有（跳过重复 acquire）"
+        else inj.exec("cmd power set-wakelock acquire -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
+    } catch (t: Throwable) {
+        "错误: $t"
+    }
+
+    /** v2.4.5：反复 release 直到 held=false（acquire 可能被多次调用导致 refCount>1） */
+    private fun releaseWakelockUntilFree(inj: Injector, displayId: Int): String = try {
+        for (i in 1..6) {
+            inj.exec("cmd power set-wakelock release -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
+            val line = inj.exec("cmd power set-wakelock list")
+                .lines()
+                .firstOrNull {
+                    it.contains("Display $displayId, wakelock type: SCREEN_BRIGHT_WAKE_LOCK")
+                }
+            if (line == null) return "已释放（无锁记录）"
+            if (!line.contains("held=true")) return "已释放（第${i}次，held=false）"
+        }
+        "仍持锁（需检查 list 输出）"
+    } catch (t: Throwable) {
+        "错误: $t"
+    }
+
     private fun activateRear(inj: Injector, displayId: Int) {
         Thread {
             try {
@@ -536,7 +642,7 @@ class MirrorService : Service() {
                     "UP=\$(awk '{printf \"%d\", \$1*1000}' /proc/uptime); " +
                         "service call power 16777210 i64 \$UP i32 1 s16 CAMERA_CALL"
                 )
-                val l1 = inj.exec("cmd power set-wakelock acquire -d $displayId SCREEN_BRIGHT_WAKE_LOCK")
+                val l1 = acquireWakelockIfNeeded(inj, displayId)
                 val l2 = inj.exec("cmd power wakeup --display-id $displayId")
                 Diag.log(
                     "背屏激活: 事务=${wake0.take(24)} 常亮锁=${l1.ifBlank { "OK(无输出)" }} " +
