@@ -268,6 +268,12 @@ val frame = BackFrame(this)
     }
 
     private fun setupMapper(frame: BackFrame) {
+        // v2.2.0：evdev 直读模式下，背屏视图只吞掉触摸（防系统误触），不参与映射
+        if (cfg?.evdev == true) {
+            Diag.log("evdev 直读模式：背屏视图仅吞触摸，输入由内核直读驱动")
+            frame.touchHandler = { true }
+            return
+        }
         val inj = injector ?: return
         mapper = TouchMapper(inj, cfg!!, mainW, mainH) { x, y, visible -> moveCursorTo(x, y, visible) }
     }
