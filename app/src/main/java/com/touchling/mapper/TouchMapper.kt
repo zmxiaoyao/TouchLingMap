@@ -134,7 +134,7 @@ class TouchMapper(
     private val mainW: Int,
     private val mainH: Int,
     private val onCursor: (Float, Float, Boolean) -> Unit,
-    /** v2.4.5：体感光标当前位置读取（服务级陀螺仪驱动，-1 表示未初始化） */
+    // v2.4.5：体感光标当前位置读取（服务级陀螺仪驱动，-1 表示未初始化）
     private val gyroPos: () -> Pair<Float, Float> = { -1f to -1f }
 ) {
     // 触控板光标（主屏坐标）
