@@ -95,8 +95,19 @@ class RearActivity : Activity() {
         cfg = Cfg.load(this)
         injector = MirrorService.injectorInstance
         Diag.log("注入器=${injector?.javaClass?.simpleName ?: "null"} gyro=${cfg?.gyro} scroll2=${cfg?.scroll2}")
+val frame = BackFrame(this)
 
-        val frame = BackFrame(this)
+        // v0.8.0 HTML 主题模式：WebView 渲染（内置示例 / AI 生成）
+        val htmlMode = cfg?.htmlTheme ?: 0
+        if (htmlMode != 0) {
+            val wv = HtmlThemeView(this, htmlMode == 1, java.io.File(filesDir, "themes/ai.html"))
+            frame.addView(wv, FrameLayout.LayoutParams(-1, -1))
+            setContentView(frame)
+            applyWindowMode()
+            Diag.log("HTML主题模式=$htmlMode")
+            return
+        }
+
 
         // v0.7.0 背屏互动玩具：选了玩具则跳过映射流程（纯本地互动，不注入主屏）
         val toyId = cfg?.toy ?: 0
