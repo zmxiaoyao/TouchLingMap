@@ -29,7 +29,7 @@
         <!-- 背屏镜像 Activity（由服务用 am start 加 display 参数拉到背屏） -->
         <activity
             android:name=".RearActivity"
-            android:exported="false"
+            android:exported="true"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|uiMode|density"
