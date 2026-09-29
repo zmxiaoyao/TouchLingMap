@@ -13,7 +13,13 @@ class Cfg(
     val mask: Int,
     val channel: String,
     val gyro: Boolean,
-    val scroll2: Boolean
+    val scroll2: Boolean,
+    val invX: Boolean,
+    val invY: Boolean,
+    val cursorStyle: Int,
+    val cursorSizeIdx: Int,
+    val cursorColor: Int,
+    val rearBg: Int
 ) {
     companion object {
         fun load(ctx: Context): Cfg {
@@ -24,7 +30,13 @@ class Cfg(
                 sp.getInt("mask", 0),
                 sp.getString("channel", "auto") ?: "auto",
                 sp.getBoolean("gyro", false),
-                sp.getBoolean("scroll2", true)
+                sp.getBoolean("scroll2", true),
+                sp.getBoolean("invX", false),
+                sp.getBoolean("invY", false),
+                sp.getInt("cursorStyle", 0),
+                sp.getInt("cursorSizeIdx", 1),
+                sp.getInt("cursorColor", 0),
+                sp.getInt("rearBg", 0)
             )
         }
     }
@@ -111,8 +123,10 @@ class TouchMapper(
                 onCursor(cx, cy, true)
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = e.x - lastX
-                val dy = e.y - lastY
+                val ix = if (cfg.invX) -1f else 1f
+                val iy = if (cfg.invY) -1f else 1f
+                val dx = (e.x - lastX) * ix
+                val dy = (e.y - lastY) * iy
                 lastX = e.x; lastY = e.y
                 if (!longPressFired && hypot(e.x - downX, e.y - downY) > 12f) {
                     moved = true
