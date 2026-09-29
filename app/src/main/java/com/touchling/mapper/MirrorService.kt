@@ -370,8 +370,7 @@ class MirrorService : Service() {
         when {
             !cfg.evdev -> {}
             displayOnly -> Diag.log("evdev 跳过：只显示模式（无触摸映射）")
-            cfg.mode == "gyro" -> Diag.log("evdev: 体感光标模式（陀螺仪移动光标 + 触摸点击/拖拽）")
-            cfg.mode != "pad" && cfg.mode != "direct" && cfg.mode != "gesture" ->
+            cfg.mode != "pad" && cfg.mode != "direct" && cfg.mode != "gyro" ->
                 Diag.log("evdev 跳过：未知模式 ${cfg.mode}")
             else -> {
                 if ((cfg.mode == "pad" || cfg.mode == "gyro") && cursorSink == null) {
