@@ -174,7 +174,7 @@ class TouchMapper(
 
     fun handle(e: MotionEvent, view: View): Boolean {
         return when (cfg.mode) {
-            "gyro" -> gyroTap(e, view) // v2.4.5：体感光标模式（陀螺仪管移动，触摸轻点=点击光标处）
+            "gyro" -> gyroTouch(e, view) // v2.4.6：体感光标模式（陀螺仪管移动，触摸轻点=点击、拖动=移光标）
             "pad" -> pad(e, view)
             "gesture" -> gesture(e, view) // v2.3.0 手势映射
             else -> direct(e, view)
@@ -415,20 +415,35 @@ class TouchMapper(
         stat('U')
     }
 
-        /** v2.4.5：体感光标模式下的触摸（轻点=点击光标处，微动容差=识别阈值×屏宽） */
+        /** v2.4.6：体感光标模式下的触摸（轻点=点击光标处；拖动=移动光标） */
     private var gtMoved = false
+    private var gtLastX = 0f
+    private var gtLastY = 0f
 
-    private fun gyroTap(e: MotionEvent, view: View): Boolean {
+    private fun gyroTouch(e: MotionEvent, view: View): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x
                 downY = e.y
                 gtMoved = false
+                gtLastX = e.x
+                gtLastY = e.y
             }
             MotionEvent.ACTION_MOVE -> {
                 if (hypot(e.x - downX, e.y - downY) > cfg.gThreshold * view.width) {
                     gtMoved = true
                 }
+                if (gtMoved) {
+                    // 拖动=按触摸位移平移光标（位置经 onCursor 同步到服务级光标状态）
+                    val p = gyroPos()
+                    if (p.first >= 0f && p.second >= 0f) {
+                        val nx = (p.first + (e.x - gtLastX) * 1.6f).coerceIn(0f, mainW - 1f)
+                        val ny = (p.second + (e.y - gtLastY) * 1.6f).coerceIn(0f, mainH - 1f)
+                        onCursor(nx, ny, true)
+                    }
+                }
+                gtLastX = e.x
+                gtLastY = e.y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!gtMoved) {
