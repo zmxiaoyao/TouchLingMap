@@ -19,7 +19,8 @@ class Cfg(
     val cursorStyle: Int,
     val cursorSizeIdx: Int,
     val cursorColor: Int,
-    val rearBg: Int
+    val rearBg: Int,
+    val toy: Int
 ) {
     companion object {
         fun load(ctx: Context): Cfg {
@@ -36,7 +37,8 @@ class Cfg(
                 sp.getInt("cursorStyle", 0),
                 sp.getInt("cursorSizeIdx", 1),
                 sp.getInt("cursorColor", 0),
-                sp.getInt("rearBg", 0)
+                sp.getInt("rearBg", 0),
+                sp.getInt("toy", 0)
             )
         }
     }
