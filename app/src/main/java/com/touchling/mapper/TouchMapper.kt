@@ -294,7 +294,9 @@ class TouchMapper(
         // 灵敏度（0.2~4.0，默认 1.5 → 缩放系数 1.0，围绕屏幕中心缩放有效区）
         val k = cfg.sens / 1.5f
         val x = ((nx - 0.5f) * mainW * k + mainW * 0.5f).coerceIn(0f, mainW - 1f)
-        val y = ((ny - 0.5f) * mainH * k + mainH * 0.5f).coerceIn(0f, mainH - 1f)
+        var y = ((ny - 0.5f) * mainH * k + mainH * 0.5f).coerceIn(0f, mainH - 1f)
+        // v2.4.3：上下反转（手势参数 invertSwipe 即时作用于灵触映射）
+        if (cfg.gInvert) y = mainH - 1f - y
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastSendX = x; lastSendY = y; lastSendT = now()
