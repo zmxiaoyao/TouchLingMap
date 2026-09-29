@@ -26,7 +26,7 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- 背屏镜像 Activity（由服务用 am start --display 拉到背屏） -->
+        <!-- 背屏镜像 Activity（由服务用 am start 加 display 参数拉到背屏） -->
         <activity
             android:name=".RearActivity"
             android:exported="false"
