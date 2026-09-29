@@ -11,7 +11,9 @@ class Cfg(
     val mode: String,
     val sens: Float,
     val mask: Int,
-    val channel: String
+    val channel: String,
+    val gyro: Boolean,
+    val scroll2: Boolean
 ) {
     companion object {
         fun load(ctx: Context): Cfg {
@@ -20,7 +22,9 @@ class Cfg(
                 sp.getString("mode", "direct") ?: "direct",
                 sp.getFloat("sens", 1f),
                 sp.getInt("mask", 0),
-                sp.getString("channel", "auto") ?: "auto"
+                sp.getString("channel", "auto") ?: "auto",
+                sp.getBoolean("gyro", false),
+                sp.getBoolean("scroll2", true)
             )
         }
     }
