@@ -2,10 +2,16 @@ package com.touchling.mapper
 
 import android.app.Activity
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Bundle
-import android.util.Log
+import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
@@ -13,115 +19,131 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.FrameLayout
-import java.io.File
+import android.widget.LinearLayout
+import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
- * 背屏镜像 Activity（v0.3.2）
- * HyperOS 禁止直接启动到背屏，改成：
- *   1. 本 Activity 先在主屏以 1x1 隐形启动（服务里 startActivity，允许）
- *   2. 把 taskId 写到 Android/data 供 shell 读取
- *   3. shell 通过 `service call activity_task 50` 把任务搬到背屏
- *   4. 检测到自己在背屏（displayId!=0）→ 全屏 + 点亮 + 可触摸
+ * 背屏镜像 Activity（v0.4.0）
+ * 流程：主屏隐形启动 → shell 搬运任务到背屏（am display move-stack）→ 展开全屏开始工作。
+ * 功能：灵触映射 / 精密触控板（光标）/ 体感空鼠 / 双指滚动 / 双指轻点=快捷面板
  */
 class RearActivity : Activity() {
 
+    companion object {
+        @Volatile var lastTaskId = -1
+        @Volatile var arrived = false
+        @Volatile var alive = false
+    }
+
     private var vdisplay: VirtualDisplay? = null
     private var mapper: TouchMapper? = null
-    private var touchCount = 0
+    private var cfg: Cfg? = null
+    private var injector: Injector? = null
+    private var cursor: View? = null
+    private var panel: LinearLayout? = null
     private var expanded = false
+    private var touchCount = 0
     private var mainW = 1200
     private var mainH = 2608
+
+    // 体感
+    private var sensorManager: SensorManager? = null
+    private var gyroListener: SensorEventListener? = null
+    private var lastGyroT = 0L
+    private var gx = 0f
+    private var gy = 0f
+
+    // 双指
+    private var twoActive = false
+    private var twoMoved = 0f
+    private var twoLastY = 0f
+    private var twoLastScrollT = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Diag.init(applicationContext)
-        Diag.log("RearActivity onCreate displayId=${display?.displayId} taskId=$taskId")
+        Diag.log("RearActivity onCreate display=${display?.displayId} task=$taskId")
+        lastTaskId = taskId
+        arrived = false
+        alive = true
 
-        // 写 taskId 供 shell 搬运
-        try {
-            val f = File(getExternalFilesDir(null), "taskid.txt")
-            f.writeText(taskId.toString())
-            Diag.log("taskId 已写入 ${f.absolutePath}")
-        } catch (t: Throwable) {
-            Diag.log("写 taskId 失败: $t")
-        }
-
-        // 主屏阶段：1x1 隐形、不抢触摸
-        window.setLayout(1, 1)
+        // 主屏阶段：全屏但全透明+不可触摸（保证 WM 视为可见，避免小窗被忽略）
+        val wl = window.attributes
+        wl.alpha = 0f
+        window.attributes = wl
+        window.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
         window.addFlags(
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         )
 
-        // 主屏尺寸
         val dm = getSystemService(DisplayManager::class.java)
         val main = dm.getDisplay(Display.DEFAULT_DISPLAY)
-        val mode = main.mode
-        mainW = mode.physicalWidth
-        mainH = mode.physicalHeight
+        mainW = main.mode.physicalWidth
+        mainH = main.mode.physicalHeight
         val dpi = applicationContext.resources.displayMetrics.densityDpi
 
-        val cfg = Cfg.load(this)
-        val frame = BackFrame(this)
+        cfg = Cfg.load(this)
+        injector = MirrorService.injectorInstance
+        Diag.log("注入器=${injector?.javaClass?.simpleName ?: "null"} gyro=${cfg?.gyro} scroll2=${cfg?.scroll2}")
 
+        val frame = BackFrame(this)
         val sv = SurfaceView(this)
-        frame.addView(
-            sv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
+        frame.addView(sv, FrameLayout.LayoutParams(-1, -1))
 
         val mask = View(this).apply {
-            setBackgroundColor(android.graphics.Color.BLACK)
-            alpha = cfg.mask / 100f
+            setBackgroundColor(Color.BLACK)
+            alpha = (cfg?.mask ?: 0) / 100f
         }
-        frame.addView(
-            mask,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
+        frame.addView(mask, FrameLayout.LayoutParams(-1, -1))
 
-        val cursorSize = (26 * resources.displayMetrics.density).toInt()
-        val cursor = View(this).apply {
-            setBackgroundColor(0xDDFFFFFF.toInt())
+        // 光标（圆形 + 半透明）
+        val cs = (22 * resources.displayMetrics.density).toInt()
+        cursor = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xAAFFFFFF.toInt())
+                setStroke((2 * resources.displayMetrics.density).toInt(), 0xFF007AFF.toInt())
+            }
             visibility = View.GONE
         }
+        frame.addView(cursor, FrameLayout.LayoutParams(cs, cs, Gravity.TOP or Gravity.START))
+
+        // 快捷面板（默认隐藏）
+        panel = buildPanel()
         frame.addView(
-            cursor,
-            FrameLayout.LayoutParams(cursorSize, cursorSize, Gravity.TOP or Gravity.START)
+            panel,
+            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = (24 * resources.displayMetrics.density).toInt()
+            }
         )
 
-        val inj = MirrorService.injectorInstance
-        Diag.log("注入器=${inj?.javaClass?.simpleName ?: "null"}")
-        if (inj != null) {
-            mapper = TouchMapper(inj, cfg, mainW, mainH) { x, y, visible ->
-                val bw = frame.width.takeIf { it > 0 } ?: 1
-                val bh = frame.height.takeIf { it > 0 } ?: 1
-                val lp = cursor.layoutParams as FrameLayout.LayoutParams
-                lp.leftMargin = (x / mainW * bw).toInt()
-                lp.topMargin = (y / mainH * bh).toInt()
-                cursor.layoutParams = lp
-                cursor.visibility = if (visible) View.VISIBLE else View.GONE
-            }
-        }
+        // 触摸分发
         frame.touchHandler = { e ->
-            if (touchCount < 8) {
-                Diag.log("背屏触摸#$touchCount action=${e.actionMasked} x=${e.x} y=${e.y}")
+            if (touchCount < 10) {
+                Diag.log("触摸#$touchCount p=${e.pointerCount} act=${e.actionMasked}")
                 touchCount++
             }
-            mapper?.handle(e, frame) ?: false
+            when {
+                e.pointerCount >= 2 && (cfg?.scroll2 ?: true) -> twoFinger(e)
+                (cfg?.gyro ?: false) -> gyroTouch(e)
+                else -> mapper?.handle(e, frame) ?: false
+            }
         }
+
+        setupMapper(frame)
+        setupGyro(frame)
 
         sv.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                val proj = MirrorService.projection
-                if (proj == null) {
-                    Diag.log("surfaceCreated 但 projection 为 null！")
+                val proj = MirrorService.projection ?: run {
+                    Diag.log("surfaceCreated 但 projection=null")
                     return
                 }
                 vdisplay = proj.createVirtualDisplay(
@@ -129,7 +151,7 @@ class RearActivity : Activity() {
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     holder.surface, null, null
                 )
-                Diag.log("VirtualDisplay 创建: ${vdisplay != null}")
+                Diag.log("VirtualDisplay=${vdisplay != null}")
             }
 
             override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
@@ -140,12 +162,158 @@ class RearActivity : Activity() {
         applyWindowMode()
     }
 
-    /** 根据当前所在显示屏切换窗口形态 */
+    private fun setupMapper(frame: BackFrame) {
+        val inj = injector ?: return
+        mapper = TouchMapper(inj, cfg!!, mainW, mainH) { x, y, visible -> moveCursorTo(x, y, visible) }
+    }
+
+    private fun moveCursorTo(x: Float, y: Float, visible: Boolean) {
+        val c = cursor ?: return
+        val fw = c.parent?.let { (it as View).width } ?: 1
+        val fh = c.parent?.let { (it as View).height } ?: 1
+        val lp = c.layoutParams as FrameLayout.LayoutParams
+        lp.leftMargin = (x / mainW * fw).toInt() - c.width / 2
+        lp.topMargin = (y / mainH * fh).toInt() - c.height / 2
+        c.layoutParams = lp
+        if (visible) c.visibility = View.VISIBLE
+    }
+
+    // ---------- 双指：滚动 / 轻点开面板 ----------
+    private fun twoFinger(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_MOVE -> {
+                if (!twoActive) {
+                    twoActive = true
+                    twoMoved = 0f
+                    twoLastY = e.getY(0)
+                }
+                val y = e.getY(0)
+                val dy = y - twoLastY
+                twoLastY = y
+                twoMoved += abs(dy)
+                val t = SystemClock.uptimeMillis()
+                if (abs(dy) > 12 && t - twoLastScrollT > 140) {
+                    twoLastScrollT = t
+                    val step = if (dy < 0) 260 else -260
+                    val cx = mainW / 2
+                    val cy = mainH / 2
+                    injector?.exec(
+                        "/system/bin/input swipe $cx $cy $cx ${(cy + step).coerceIn(50, mainH - 50)} 90"
+                    )
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP -> {
+                if (twoActive && twoMoved < 24f) togglePanel()
+                twoActive = false
+            }
+        }
+        return true
+    }
+
+    // ---------- 体感空鼠 ----------
+    private fun setupGyro(@Suppress("UNUSED_PARAMETER") frame: BackFrame) {
+        if (cfg?.gyro != true) return
+        val sm = getSystemService(SensorManager::class.java)
+        sensorManager = sm
+        val gyro = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        gx = mainW / 2f
+        gy = mainH / 2f
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(ev: SensorEvent) {
+                if (!expanded) return
+                val t = SystemClock.uptimeMillis()
+                if (t - lastGyroT < 40) return
+                lastGyroT = t
+                // values: 0=pitch轴 1=roll轴 2=yaw轴
+                val dx = -ev.values[2] * 14f
+                val dy = -ev.values[0] * 14f
+                gx = (gx + dx).coerceIn(0f, mainW - 1f)
+                gy = (gy + dy).coerceIn(0f, mainH - 1f)
+                moveCursorTo(gx, gy, true)
+            }
+
+            override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+        }
+        gyroListener = listener
+        sm.registerListener(listener, gyro, SensorManager.SENSOR_DELAY_GAME)
+    }
+
+    /** 体感模式下的触摸：轻点=在光标处点击；拖动=继续移动光标 */
+    private fun gyroTouch(e: MotionEvent): Boolean {
+        val inj = injector ?: return false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                gDownX = e.x; gDownY = e.y; gMoved = 0f
+            }
+            MotionEvent.ACTION_MOVE -> {
+                gx = (gx + (e.x - gDownX) * 1.2f).coerceIn(0f, mainW - 1f)
+                gy = (gy + (e.y - gDownY) * 1.2f).coerceIn(0f, mainH - 1f)
+                gMoved += hypot(e.x - gDownX, e.y - gDownY)
+                gDownX = e.x; gDownY = e.y
+                moveCursorTo(gx, gy, true)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (gMoved < 20f) inj.tap(gx, gy)
+                moveCursorTo(gx, gy, true)
+            }
+        }
+        return true
+    }
+
+    private var gDownX = 0f
+    private var gDownY = 0f
+    private var gMoved = 0f
+
+    // ---------- 快捷面板 ----------
+    private fun buildPanel(): LinearLayout {
+        val p = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply {
+                cornerRadius = (22 * resources.displayMetrics.density).toFloat()
+                setColor(0xCC1C1C1E.toInt())
+            }
+            val pad = (8 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+        }
+        fun addBtn(label: String, key: Int) {
+            p.addView(Button(this).apply {
+                text = label
+                textSize = 13f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = (16 * resources.displayMetrics.density).toFloat()
+                    setColor(0xFF2C2C2E.toInt())
+                }
+                setOnClickListener {
+                    injector?.key(key)
+                    panel?.visibility = View.GONE
+                }
+            })
+        }
+        addBtn("返回", 4)
+        addBtn("主页", 3)
+        addBtn("任务", 187)
+        addBtn("截图", 120)
+        addBtn("音量-", 25)
+        addBtn("音量+", 24)
+        return p
+    }
+
+    private fun togglePanel() {
+        val p = panel ?: return
+        p.visibility = if (p.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        Diag.log("快捷面板 ${if (p.visibility == View.VISIBLE) "显示" else "隐藏"}")
+    }
+
+    // ---------- 窗口形态 ----------
     private fun applyWindowMode() {
         val onRear = (display?.displayId ?: 0) != Display.DEFAULT_DISPLAY
         if (onRear && !expanded) {
             expanded = true
-            Diag.log("已抵达背屏 displayId=${display?.displayId} → 展开全屏")
+            arrived = true
+            Diag.log("已抵达背屏 display=${display?.displayId} → 展开")
             window.clearFlags(
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -156,6 +324,9 @@ class RearActivity : Activity() {
                     WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
             )
             try { window.setDecorFitsSystemWindows(false) } catch (_: Throwable) {}
+            val wl = window.attributes
+            wl.alpha = 1f
+            window.attributes = wl
             window.setLayout(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT
@@ -170,12 +341,14 @@ class RearActivity : Activity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        Diag.log("onConfigurationChanged displayId=${display?.displayId}")
+        Diag.log("onConfigChanged display=${display?.displayId}")
         applyWindowMode()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        alive = false
+        try { gyroListener?.let { sensorManager?.unregisterListener(it) } } catch (_: Throwable) {}
         try { vdisplay?.release() } catch (_: Throwable) {}
         Diag.log("RearActivity onDestroy")
     }
