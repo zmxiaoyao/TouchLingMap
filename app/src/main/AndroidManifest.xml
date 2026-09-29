@@ -26,6 +26,15 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- 背屏镜像 Activity（由服务用 am start --display 拉到背屏） -->
+        <activity
+            android:name=".RearActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|uiMode|density"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+
         <!-- Shizuku 授权提供器 -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
