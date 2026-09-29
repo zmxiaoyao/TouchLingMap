@@ -215,6 +215,7 @@ class MainActivity : Activity() {
             MirrorService.stop(this)
             Toast.makeText(this, "已请求停止", Toast.LENGTH_SHORT).show()
         })
+        actionCard.addView(bigButton("🖼 只显示主题到背屏", 0xFF0A84FF.toInt()) { startDisplayOnly() })
         actionCard.addView(bigButton("授权 Shizuku", 0xFF007AFF.toInt()) {
             try {
                 Shizuku.requestPermission(1002)
@@ -237,10 +238,6 @@ class MainActivity : Activity() {
         styleCard.addView(colorRow)
         styleCard.addView(sectionTitle("光标大小"))
         styleCard.addView(optionRow("cursorSizeIdx", 1, listOf("小", "中", "大")))
-        styleCard.addView(sectionTitle("背屏显示样式"))
-        styleCard.addView(optionRow("rearBg", 0, listOf("镜像", "纯黑", "网格")))
-        styleCard.addView(sectionTitle("背屏互动玩具"))
-        styleCard.addView(optionRow("toy", 0, listOf("关闭", "转盘", "真心话", "木鱼", "骰子")))
         styleCard.addView(sectionTitle("方向反转（触控板 / 体感）"))
         styleCard.addView(switchRow("左右反转", "invX"))
         styleCard.addView(switchRow("上下反转", "invY"))
@@ -250,7 +247,7 @@ class MainActivity : Activity() {
             setTextColor(0xFF9CA3AF.toInt())
             setPadding(0, dp(8f), 0, 0)
         })
-        page2.addView(styleCard)
+        page4.addView(styleCard)
 
         // AI 主题工坊（v0.8.0）：用 AI 生成 HTML 主题，背屏用 WebView 渲染
         val aiCard = card()
@@ -285,9 +282,30 @@ class MainActivity : Activity() {
             setPadding(0, dp(4f), 0, dp(8f))
         }
         aiCard.addView(tvAiStatus)
-        aiCard.addView(sectionTitle("背屏主题渲染（HTML）"))
-        aiCard.addView(optionRow("htmlTheme", 0, listOf("关闭", "内置示例", "我的AI主题")))
         page3.addView(aiCard)
+
+        // 背屏内容卡（v1.0.0）：显示什么 + 一键只上屏（不开启触摸映射）
+        val contentCard = card()
+        contentCard.addView(sectionTitle("背屏显示什么（HTML 主题）"))
+        contentCard.addView(
+            optionRow("htmlTheme", 0, listOf("关闭", "木鱼", "时钟", "转盘", "我的AI"))
+        )
+        contentCard.addView(sectionTitle("内置互动玩具（原生）"))
+        contentCard.addView(
+            optionRow("toy", 0, listOf("关闭", "转盘", "真心话", "木鱼", "骰子"))
+        )
+        contentCard.addView(sectionTitle("背屏底色样式"))
+        contentCard.addView(optionRow("rearBg", 0, listOf("镜像", "纯黑", "网格")))
+        contentCard.addView(bigButton("🖼 只把主题/玩具显示到背屏", 0xFF0A84FF.toInt()) {
+            startDisplayOnly()
+        })
+        contentCard.addView(TextView(this).apply {
+            text = "※ 这个按钮只把内容投到背屏，不开启触摸映射（不会启动灵触/触控板）"
+            textSize = 11f
+            setTextColor(0xFF9CA3AF.toInt())
+            setPadding(0, dp(2f), 0, 0)
+        })
+        page2.addView(contentCard)
 
         // 注入通道
         val channelCard = card()
@@ -435,12 +453,12 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0xE61B1C20.toInt(), 0xB3131417.toInt())
+                intArrayOf(0xCCFFFFFF.toInt(), 0x8CFFFFFF.toInt())
             ).apply {
                 cornerRadius = dp(26f).toFloat()
-                setStroke(dp(1f), 0x3DFFFFFF)
+                setStroke(dp(1f), 0xB3FFFFFF.toInt())
             }
-            elevation = dp(12f).toFloat()
+            elevation = dp(10f).toFloat()
             setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
         }
         val lp = LinearLayout.LayoutParams(
@@ -454,8 +472,8 @@ class MainActivity : Activity() {
         navTvs.clear()
         val tabs = listOf(
             "🎛" to "控制",
-            "🎨" to "样式",
-            "✨" to "AI 主题",
+            "🖼" to "背屏内容",
+            "✨" to "AI 工坊",
             "⚙️" to "设置"
         )
         tabs.forEachIndexed { i, (icon, label) ->
@@ -499,10 +517,10 @@ class MainActivity : Activity() {
             item.background = if (on) {
                 GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(0x4DFFFFFF, 0x1FFFFFFF)
+                    intArrayOf(0xFFFFFFFF.toInt(), 0xF2FFFFFF.toInt())
                 ).apply {
                     cornerRadius = dp(18f).toFloat()
-                    setStroke(dp(1f), 0x33FFFFFF)
+                    setStroke(dp(1f), 0x66FFFFFF)
                 }
             } else {
                 GradientDrawable().apply { setColor(0x00000000) }
@@ -511,8 +529,8 @@ class MainActivity : Activity() {
                 .scaleY(if (on) 1f else 0.94f)
                 .setDuration(140).start()
             navTvs.getOrNull(i)?.let { (icon, label) ->
-                icon.alpha = if (on) 1f else 0.6f
-                label.setTextColor(if (on) 0xFFFFFFFF.toInt() else 0x99FFFFFF.toInt())
+                icon.alpha = if (on) 1f else 0.5f
+                label.setTextColor(if (on) 0xFF1F2430.toInt() else 0x8A1F2430.toInt())
             }
         }
     }
@@ -592,9 +610,9 @@ class MainActivity : Activity() {
         }
         if (key.isEmpty()) {
             saveTheme(DefaultTheme.HTML)
-            sp.edit().putInt("htmlTheme", 2).apply()
+            sp.edit().putInt("htmlTheme", 4).apply()
             persistCfg()
-            tvAiStatus.text = "未填 API Key → 已保存「内置示例主题」，并把背屏主题切到「我的AI主题」"
+            tvAiStatus.text = "未填 API Key → 已保存「内置木鱼主题」，并把背屏内容切到「我的AI」（可在背屏内容页改选内置其他主题）"
             return
         }
         tvAiStatus.text = "生成中…（最长 2 分钟，请勿退出）"
@@ -639,7 +657,7 @@ class MainActivity : Activity() {
                     .getJSONObject("message").getString("content")
                 val html = extractHtml(content)
                 saveTheme(html)
-                sp.edit().putInt("htmlTheme", 2).apply()
+                sp.edit().putInt("htmlTheme", 4).apply()
                 Diag.log("AI 主题生成成功 ${html.length} 字符")
                 runOnUiThread {
                     tvAiStatus.text = "✅ 已生成并保存（${html.length} 字符）→ 背屏主题已切到「我的AI主题」"
@@ -674,6 +692,27 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             Diag.log("保存主题失败: $t")
         }
+    }
+
+    /** v1.0.0：只把主题/玩具显示到背屏（不开启触摸映射，也不需要投屏授权） */
+    private fun startDisplayOnly() {
+        Diag.log("用户点击 只显示到背屏")
+        persistCfg()
+        val htmlMode = sp.getInt("htmlTheme", 0)
+        val toy = sp.getInt("toy", 0)
+        if (htmlMode == 0 && toy == 0) {
+            Toast.makeText(
+                this, "请先在「背屏内容」页选择一个主题或玩具", Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val i = Intent(this, MirrorService::class.java).apply {
+            action = "start"
+            putExtra("displayOnly", true)
+            putExtra("noProjection", true)
+        }
+        startForegroundService(i)
+        Toast.makeText(this, "正在把内容显示到背屏…", Toast.LENGTH_SHORT).show()
     }
 
     private fun startProjection() {
@@ -720,13 +759,15 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 1001) {
-            Diag.log("投屏授权结果 resultCode=$resultCode")
+        if (requestCode == 1001 || requestCode == 1004) {
+            val only = requestCode == 1004
+            Diag.log("投屏授权结果 resultCode=$resultCode displayOnly=$only")
             if (resultCode == RESULT_OK && data != null) {
                 val i = Intent(this, MirrorService::class.java).apply {
                     action = "start"
                     putExtra("resultCode", resultCode)
                     putExtra("resultData", data)
+                    putExtra("displayOnly", only)
                 }
                 startForegroundService(i)
             } else {
