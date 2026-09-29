@@ -118,6 +118,11 @@ class MirrorService : Service() {
         if (noProj) {
             Diag.log("noProjection 模式：跳过投屏会话（主题/玩具不需要）")
         } else {
+            if (data == null) {
+                Diag.log("非 noProjection 但 data 为空 → stopSelf")
+                stopSelf()
+                return
+            }
             val mpm = getSystemService(MediaProjectionManager::class.java)
             val mp = try {
                 mpm.getMediaProjection(code, data)
@@ -161,7 +166,7 @@ class MirrorService : Service() {
         if (back == null) {
             Diag.log("未找到背屏 → stopSelf")
             toast("未检测到背屏（背屏是否已唤醒？）")
-            mp.stop()
+            try { sessionMp?.stop() } catch (_: Throwable) {}
             stopSelf()
             return
         }
