@@ -254,6 +254,12 @@ class MirrorService : Service() {
         val ready = inj.start()
         injectorInstance = inj
         Diag.log("注入器=${inj.javaClass.simpleName} ready=$ready channel=${cfg.channel}")
+        // v2.4.0 实时触控桥（app_process 直连 InputManager，丝滑注入）；失败自动回退 input 命令
+        if (ready) {
+            val useRoot = inj is RootInjector ||
+                (cfg.channel != "shizuku" && Injector.rootAvailable())
+            Bridge.start(useRoot, applicationInfo.sourceDir)
+        }
 
         // 4. 处刑背屏中心：keeper 线程用独立进程执行（失败可见）
         keeperRunning = true
@@ -274,7 +280,7 @@ class MirrorService : Service() {
         }
         Diag.log("keeper 线程已启动")
 
-        // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块，妙妙同架构）
+        // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块）
         val dispId = back.displayId
         val pureTouch =
             noProjection && cfg.evdev && !displayOnly && cfg.htmlTheme == 0 && cfg.toy == 0
@@ -390,11 +396,13 @@ class MirrorService : Service() {
                     evdev?.start(
                         dev,
                         back.mode.physicalWidth * 100 - 1,
-                        back.mode.physicalHeight * 100 - 1
+                        back.mode.physicalHeight * 100 - 1,
+                        if (cfg.capture) deployGrab() else null
                     )
                     Diag.log(
                         "evdev 直读已启动 dev=$dev mode=${cfg.mode} " +
-                            "noMirror=${cfg.noMirror} noProjection=$noProjection"
+                            "noMirror=${cfg.noMirror} noProjection=$noProjection " +
+                            "capture=${cfg.capture}"
                     )
                 }
             }
@@ -462,6 +470,10 @@ class MirrorService : Service() {
         watchdogRunning = false
         watchdog = null
         try {
+            Bridge.stop()
+        } catch (_: Throwable) {
+        }
+        try {
             evdev?.stop()
         } catch (_: Throwable) {
         }
@@ -484,6 +496,25 @@ class MirrorService : Service() {
 
     private fun toast(msg: String) {
         mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    /**
+     * v2.4.0：部署「独占背屏触摸」工具（assets/grab → filesDir/native/grab）。
+     * 返回可执行路径；assets 缺失（本地未编译）或失败时返回 null → 回退 getevent 监听。
+     */
+    private fun deployGrab(): String? = try {
+        val f = java.io.File(filesDir, "native/grab")
+        if (!f.exists() || f.length() == 0L) {
+            f.parentFile?.mkdirs()
+            assets.open("grab").use { ins ->
+                java.io.FileOutputStream(f).use { outs -> ins.copyTo(outs) }
+            }
+        }
+        f.setExecutable(true, false)
+        if (f.canExecute()) f.absolutePath else null
+    } catch (t: Throwable) {
+        Diag.log("独占工具部署失败（回退 getevent 监听）: $t")
+        null
     }
 
     override fun onDestroy() {
