@@ -74,7 +74,8 @@ object DefaultTheme {
 
     val NAMES = listOf("电子木鱼", "翻页时钟", "幸运转盘")
 
-    val HTMLS: List<String> = listOf(WoodenFish, Clock, Wheel)
+    val HTMLS: List<String>
+        get() = listOf(WoodenFish, Clock, Wheel)
 
     fun html(index: Int): String = HTMLS.getOrElse(index - 1) { HTMLS[0] }
 
