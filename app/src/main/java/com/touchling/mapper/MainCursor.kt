@@ -1,8 +1,10 @@
 package com.touchling.mapper
 
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -11,25 +13,104 @@ import android.view.View
 import android.view.WindowManager
 
 /**
- * v0.5.0 主屏光标（悬浮窗实现）
+ * v0.6.0 主屏光标（悬浮窗 + 可换样式）
  *
- * 设计初衷：触控板/体感空鼠的**光标应该显示在主屏上**——
- * 背屏当触控板（手指在背屏移动/点击），眼睛看主屏上的光标。
- *
+ * 触控板/体感模式下，光标显示在【主屏】上——背屏当触控板，眼睛看主屏。
+ * 支持：样式（圆点/十字/箭头/方框）、颜色（蓝/白/红/绿/黄）、大小（小/中/大）
  * 需要 SYSTEM_ALERT_WINDOW（悬浮窗）权限；无权限时上层回退为背屏内光标。
  */
-class MainCursor(private val ctx: Context) {
+class MainCursor(
+    private val ctx: Context,
+    private val style: Int,
+    sizeIdx: Int,
+    private val colorIdx: Int
+) {
+
+    companion object {
+        /** 0小 1中 2大 → dp */
+        fun sizeDp(idx: Int): Int = when (idx) {
+            0 -> 18
+            2 -> 36
+            else -> 26
+        }
+
+        /** 0蓝 1白 2红 3绿 4黄 */
+        fun colorOf(idx: Int): Int = when (idx) {
+            1 -> 0xFFFFFFFF.toInt()
+            2 -> 0xFFFF3B30.toInt()
+            3 -> 0xFF34C759.toInt()
+            4 -> 0xFFFFCC00.toInt()
+            else -> 0xFF2F9BFF.toInt()
+        }
+    }
 
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val density = ctx.resources.displayMetrics.density
-    private val size = (density * 24).toInt().coerceAtLeast(12)
+    private val size = (density * sizeDp(sizeIdx)).toInt().coerceAtLeast(12)
 
     private var view: View? = null
 
-    /** 是否具备悬浮窗权限 */
     val available: Boolean
         get() = Settings.canDrawOverlays(ctx)
+
+    // 样式化光标（自绘）
+    private inner class CursorView(c: Context) : View(c) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val stroke = (density * 2f).coerceAtLeast(1.5f)
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val col = colorOf(colorIdx)
+            when (style) {
+                1 -> { // 十字准星
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = stroke
+                    paint.color = col
+                    val gap = w * 0.18f
+                    canvas.drawLine(w / 2f, 0f, w / 2f, h / 2f - gap, paint)
+                    canvas.drawLine(w / 2f, h / 2f + gap, w / 2f, h, paint)
+                    canvas.drawLine(0f, h / 2f, w / 2f - gap, h / 2f, paint)
+                    canvas.drawLine(w / 2f + gap, h / 2f, w, h / 2f, paint)
+                    paint.style = Paint.Style.FILL
+                    canvas.drawCircle(w / 2f, h / 2f, stroke * 1.2f, paint)
+                }
+                2 -> { // 箭头
+                    paint.style = Paint.Style.FILL
+                    paint.color = col
+                    val p = Path().apply {
+                        moveTo(w * 0.12f, h * 0.06f)
+                        lineTo(w * 0.12f, h * 0.92f)
+                        lineTo(w * 0.42f, h * 0.66f)
+                        lineTo(w * 0.62f, h * 0.98f)
+                        lineTo(w * 0.76f, h * 0.90f)
+                        lineTo(w * 0.56f, h * 0.58f)
+                        lineTo(w * 0.92f, h * 0.52f)
+                        close()
+                    }
+                    canvas.drawPath(p, paint)
+                }
+                3 -> { // 方框
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = stroke
+                    paint.color = col
+                    val inset = stroke
+                    canvas.drawRect(inset, inset, w - inset, h - inset, paint)
+                }
+                else -> { // 圆点（默认）
+                    paint.style = Paint.Style.FILL
+                    paint.color = col
+                    paint.alpha = 0x99
+                    canvas.drawCircle(w / 2f, h / 2f, w / 2f - stroke, paint)
+                    paint.alpha = 0xFF
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = stroke
+                    canvas.drawCircle(w / 2f, h / 2f, w / 2f - stroke, paint)
+                }
+            }
+        }
+    }
 
     fun show() {
         if (!available) {
@@ -38,13 +119,7 @@ class MainCursor(private val ctx: Context) {
         }
         main.post {
             if (view != null) return@post
-            val v = View(ctx).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(0x99FFFFFF.toInt())
-                    setStroke((density * 2).toInt().coerceAtLeast(1), 0xFF2F9BFF.toInt())
-                }
-            }
+            val v = CursorView(ctx)
             val metrics = ctx.resources.displayMetrics
             val lp = WindowManager.LayoutParams(
                 size, size,
@@ -61,14 +136,14 @@ class MainCursor(private val ctx: Context) {
             try {
                 wm.addView(v, lp)
                 view = v
-                Diag.log("主屏光标已显示 size=$size")
+                Diag.log("主屏光标已显示 style=$style size=$size color=$colorIdx")
             } catch (t: Throwable) {
                 Diag.log("主屏光标添加失败: $t")
             }
         }
     }
 
-    /** 移动光标到主屏坐标 (x, y)，单位为像素 */
+    /** 移动光标到主屏坐标 (x, y)，单位 px */
     fun move(x: Float, y: Float) {
         main.post {
             val v = view ?: return@post
