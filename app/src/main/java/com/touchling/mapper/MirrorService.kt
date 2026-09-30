@@ -23,8 +23,9 @@ import android.widget.Toast
  * v0.3.0 前台服务（参考 MRSS / Mirror2RearUltra 重构）：
  * - MediaProjection 会话持有（静态桥接给 RearActivity）
  * - 通过注入器 shell 执行：
- *     ① am force-stop com.xiaomi.subscreencenter（处刑 + keeper 持续杀死）
+ *     ① 按屏常亮锁 + 按屏唤醒（参考实现同款激活：先锁后唤）
  *     ② am start --display <背屏id> -n .../.RearActivity（拉起背屏镜像 Activity 并点火）
+ * - 【v2.4.11】不再 force-stop 背屏中心（参考实现不杀它；杀它=背屏无内容黑屏+系统关屏）
  * - 停止时 monkey 拉回官方背屏中心恢复现场
  * - 会话守卫：旧投影的 onStop 不会误杀新会话
  */
@@ -267,24 +268,11 @@ class MirrorService : Service() {
             Bridge.start(useRoot, applicationInfo.sourceDir)
         }
 
-        // 4. 处刑背屏中心：keeper 线程用独立进程执行（失败可见）
-        keeperRunning = true
-        keeper = Thread {
-            var logged = false
-            while (keeperRunning) {
-                val out = inj.exec("am force-stop com.xiaomi.subscreencenter")
-                if (!logged && (out.contains("EXEC_ERR") || out.contains("DOWN"))) {
-                    Diag.log("keeper 异常: $out")
-                    logged = true
-                }
-                try { Thread.sleep(4000) } catch (_: Throwable) { break }
-            }
-        }.apply {
-            isDaemon = true
-            name = "subcenter-keeper"
-            start()
-        }
-        Diag.log("keeper 线程已启动")
+        // 4. 【v2.4.11】删除"处刑背屏中心 keeper"——对照参考实现逐行核对：
+        //    参考实现**从不**停止背屏中心（全反编译零命中 force-stop subscreencenter）。
+        //    而背屏中心是背屏内容的唯一提供者 + HyperOS 背屏电源策略的管理者：
+        //    杀它 → 背屏无内容（视觉黑屏，state=ON 也黑）→ 系统关屏（wakelock 都拦不住）
+        //    → 用户"双击多次才亮"（刚亮又被杀）。这正是"点击映射后背屏不能自动点亮"的根因。
 
         // 5. 背屏投放（v2.3.0）：免投屏+evdev+无内容 → 纯触控（不启动 Activity，根除主屏黑块）
         val dispId = back.displayId
