@@ -396,8 +396,8 @@ class MirrorService : Service() {
                     }, { gyroX to gyroY })
                     if (cfg.mode == "gyro") startGyroFeed(cfg)
                     evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
-                    // v2.4.9：异步+毫秒级清理残留 grab（v2.4.8 同步 /proc 遍历版会 ANR，已弃用）
-                    killStrayGrabAsync()
+                    // v2.4.9修订：同步快速清理（毫秒级、不会 ANR）；先杀干净再启动，杜绝误杀新进程
+                    killStrayGrab()
                     evdev?.start(
                         dev,
                         back.mode.physicalWidth * 100 - 1,
@@ -507,7 +507,7 @@ class MirrorService : Service() {
             evdev?.stop()
         } catch (_: Throwable) {
         }
-        killStrayGrabAsync() // v2.4.9：停后异步清残留（不再阻塞；v2.4.8 同步版会 ANR）
+        killStrayGrab() // v2.4.9修订：同步清理（快速命令），停止后不留孤儿 grab
         evdev = null
         // 收起主屏光标
         cursorSink = null
@@ -646,18 +646,17 @@ class MirrorService : Service() {
         }
     }
 
-    /** v2.4.9：异步清理残留 grab（快速命令：pkill/pidof 按进程名匹配，不遍历 fork；且绝不阻塞调用线程）。
-     *  v2.4.8 的同步 /proc 遍历版耗时 ~6s 卡死主线程 → ANR，已替换。 */
-    private fun killStrayGrabAsync() {
-        Thread {
-            try {
-                injectorInstance?.exec(
-                    "pkill -9 libgrab.so 2>/dev/null; " +
-                        "for p in \$(pidof libgrab.so 2>/dev/null); do kill -9 \$p 2>/dev/null; done; true"
-                )
-            } catch (_: Throwable) {
-            }
-        }.apply { isDaemon = true; name = "grab-clean" }.start()
+    /** v2.4.9修订：同步"快速清理"（pkill/pidof 是毫秒级单命令，不遍历 fork、不会 ANR）。
+     *  同步执行确保「先杀干净残留 →再启动新 grab」的先后顺序，
+     *  彻底消除"异步清理迟到、误杀刚启动的新 grab"的竞态（此前异步版存在此隐患）。 */
+    private fun killStrayGrab() {
+        try {
+            injectorInstance?.exec(
+                "pkill -9 libgrab.so 2>/dev/null; " +
+                    "for p in \$(pidof libgrab.so 2>/dev/null); do kill -9 \$p 2>/dev/null; done; true"
+            )
+        } catch (_: Throwable) {
+        }
     }
 
     private fun activateRear(inj: Injector, displayId: Int) {
