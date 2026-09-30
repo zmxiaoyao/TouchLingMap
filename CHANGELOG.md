@@ -2,6 +2,16 @@
 
 本项目版本记录。最新版本请见 [Releases](https://github.com/zmxiaoyao/TouchLingMap/releases)。
 
+## v2.4.11
+### 🐛 修复"点击映射后背屏不能自动点亮"（根因：keeper 杀背屏中心）
+- **根因（实测+日志+反编译三重证据）**：我们遗留的 `keeper 线程`每 4 秒 `force-stop com.xiaomi.subscreencenter`（背屏中心）
+  - 背屏中心 = 背屏内容的唯一提供者 + HyperOS 背屏电源策略管理者
+  - 杀它 → 背屏无内容（**display state=ON 但视觉黑屏**）→ 系统关屏（wakelock held=true 都拦不住）
+  - 用户双击背屏 → 背屏中心刚亮 → 4 秒后又被杀 → "双击很多次才行"
+- **证据**：shell 手动实验（不跑 keeper、背屏中心活着）同款命令背屏 ON 稳 15~20 秒；app 会话（keeper 在跑）5 秒后 state=1 OFF；参考实现全反编译**零** force-stop subscreencenter
+- **修复**：**删除 keeper**（与参考实现一致，不杀背屏中心）
+- 点映射 → 背屏中心正常显示 + wakelock 保持 + 独占触摸 → 直接可用
+
 ## v2.4.10
 ### 🔧 代码终审修订（逐行复核后修复 4 项隐患）
 - **清理竞态**：残留清理改为**同步执行**（毫秒级命令，不会 ANR）——确保「先杀干净残留 → 再启动新 grab」的强制先后顺序，杜绝"异步清理迟到、误杀刚启动的新 grab"
