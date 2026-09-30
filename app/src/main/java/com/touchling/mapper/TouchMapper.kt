@@ -306,9 +306,13 @@ class TouchMapper(
             }
             MotionEvent.ACTION_MOVE -> {
                 val t = now()
-                // v2.4.4：桥通道零 fork 开销 → 全帧率注入（16ms≈60fps）；仅回退 input 命令时保留节流。
-                // 抖音等对手势轨迹密度敏感的应用需要连续事件流
-                if (!Bridge.ok || hypot(x - lastSendX, y - lastSendY) >= 3f || t - lastSendT >= 16) {
+                // v2.4.4：桥通道零 fork 开销 → 全帧率注入（≈60fps）；回退 input 命令时保留稀疏节流。
+                // v2.4.9修订：修正 v2.4.4 的短路逻辑错误（!Bridge.ok 直接短路为 true → 回退时反而"全量 fork"）
+                val dist = hypot(x - lastSendX, y - lastSendY)
+                val dt = t - lastSendT
+                val should = if (!Bridge.ok) (dist >= 12f || dt >= 40) // 回退通道：稀疏注入（fork 昂贵）
+                else (dist >= 3f || dt >= 16) // 桥通道：全帧率
+                if (should) {
                     emitMove(x, y)
                     lastSendX = x; lastSendY = y; lastSendT = t
                 }
