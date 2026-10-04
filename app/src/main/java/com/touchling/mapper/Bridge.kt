@@ -65,19 +65,31 @@ object Bridge {
             }
             // 握手：等第一行 MM_READY
             val ready = CountDownLatch(1)
+            // v2.4.11：排空线程健壮化——此前 reader 一旦异常退出就没人读回复，
+            // 远端 TouchBridge 的 stdout 管道积满 → 它阻塞在 println → 不再读命令 →
+            // 客户端 write 卡死 = "映射久了卡顿掉帧"。异常时不断重开 reader 续排空。
             Thread {
-                try {
-                    val br = inp.bufferedReader()
-                    val first = br.readLine()
-                    if (first == "MM_READY") {
-                        ready.countDown()
-                    } else {
-                        Diag.log("Bridge 握手失败: $first")
+                while (true) {
+                    try {
+                        val br = inp.bufferedReader()
+                        val first = br.readLine() ?: break // 远端退出
+                        if (first == "MM_READY") {
+                            ready.countDown()
+                        } else {
+                            Diag.log("Bridge 握手失败: $first")
+                        }
+                        // 持续排空回复（防管道写满）
+                        while (br.readLine() != null) {
+                        }
+                        break // 远端正常退出
+                    } catch (t: Throwable) {
+                        Diag.log("Bridge reader 异常，续排空: $t")
+                        try {
+                            Thread.sleep(200)
+                        } catch (_: Throwable) {
+                            break
+                        }
                     }
-                    // 持续排空回复（防管道写满）
-                    while (br.readLine() != null) {
-                    }
-                } catch (_: Throwable) {
                 }
             }.apply { isDaemon = true; name = "bridge-reader"; start() }
 
