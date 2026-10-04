@@ -79,6 +79,8 @@ class MirrorService : Service() {
     private var sessionMp: MediaProjection? = null
     private var keeper: Thread? = null
     @Volatile private var keeperRunning = false
+    // v2.4.12：触控映射器引用（体感"长按按住"时，传感器移动光标需驱动主屏滑动）
+    private var touchMapper: TouchMapper? = null
     private var watchdog: Thread? = null
     @Volatile private var watchdogRunning = false
     private var evdev: EvdevTouch? = null
@@ -382,6 +384,7 @@ class MirrorService : Service() {
                     val m = TouchMapper(inj, cfg, realW, realH, { x, y, _ ->
                         cursorSink?.invoke(x, y)
                     }, { gyroX to gyroY })
+                    touchMapper = m // v2.4.12：供体感长按滑动驱动
                     if (cfg.mode == "gyro") startGyroFeed(cfg)
                     evdev = EvdevTouch(this, m, { c -> inj.spawn(c) }) { Diag.log(it) }
                     // v2.4.9修订：同步快速清理（毫秒级、不会 ANR）；先杀干净再启动，杜绝误杀新进程
@@ -497,6 +500,7 @@ class MirrorService : Service() {
         }
         killStrayGrab() // v2.4.9修订：同步清理（快速命令），停止后不留孤儿 grab
         evdev = null
+        touchMapper = null // v2.4.12
         // 收起主屏光标
         cursorSink = null
         try { mainCursor?.hide() } catch (_: Throwable) {}
@@ -576,6 +580,8 @@ class MirrorService : Service() {
                     gyroX = (gyroX - rvX * 14f * ix).coerceIn(0f, mw - 1f)
                     gyroY = (gyroY - rvY * 14f * iy).coerceIn(0f, mh - 1f)
                     cursorSink?.invoke(gyroX, gyroY)
+                    // v2.4.12：体感"长按按住"状态下，光标移动 = 主屏滑动（翻页）
+                    touchMapper?.onGyroCursor(gyroX, gyroY)
                 }
 
                 override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
