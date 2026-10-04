@@ -301,20 +301,30 @@ class TouchMapper(
         if (cfg.gInvert) y = mainH - 1f - y
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // v2.4.12：平滑初值对齐（防止上一次触摸的滤波尾部拖拽）
+                smoothX = x; smoothY = y
                 lastSendX = x; lastSendY = y; lastSendT = now()
                 emitDown(x, y) // v2.4.8：补上统计包装（此前漏包装导致"注入统计 D=0"误报）
             }
             MotionEvent.ACTION_MOVE -> {
                 val t = now()
-                // v2.4.4：桥通道零 fork 开销 → 全帧率注入（≈60fps）；回退 input 命令时保留稀疏节流。
-                // v2.4.9修订：修正 v2.4.4 的短路逻辑错误（!Bridge.ok 直接短路为 true → 回退时反而"全量 fork"）
-                val dist = hypot(x - lastSendX, y - lastSendY)
+                // v2.4.12：灵触平滑（对齐参考实现 smoothing=0.045s）——背屏原始事件的抖动/不均匀
+                // 直接进主屏时，桌面/ScrollView 阈值低能动，但抖音这类靠 VelocityTracker 识别 fling
+                // 的应用会判定"速度过低/轨迹异常"而拒绝滑动（v2.4.4 起的"仅抖音失效"同源问题）。
+                val a = cfg.smoothFactor
+                smoothX += (x - smoothX) * a
+                smoothY += (y - smoothY) * a
+                val sx = smoothX
+                val sy = smoothY
+                // 桥通道零 fork 开销 → 放密轨迹（距离2px 或 8ms≈125fps），喂饱抖音的 fling 识别；
+                // 回退 input 命令时保留稀疏节流（fork 昂贵）
+                val dist = hypot(sx - lastSendX, sy - lastSendY)
                 val dt = t - lastSendT
-                val should = if (!Bridge.ok) (dist >= 12f || dt >= 40) // 回退通道：稀疏注入（fork 昂贵）
-                else (dist >= 3f || dt >= 16) // 桥通道：全帧率
+                val should = if (!Bridge.ok) (dist >= 12f || dt >= 40)
+                else (dist >= 2f || dt >= 8)
                 if (should) {
-                    emitMove(x, y)
-                    lastSendX = x; lastSendY = y; lastSendT = t
+                    emitMove(sx, sy)
+                    lastSendX = sx; lastSendY = sy; lastSendT = t
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> emitUp(x, y)
@@ -348,8 +358,13 @@ class TouchMapper(
                     view.removeCallbacks(longPressRunnable)
                 }
                 if (dragging) {
-                    dragX = (dragX + dx * cfg.padSens).coerceIn(0f, mainW - 1f)
-                    dragY = (dragY + dy * cfg.padSens).coerceIn(0f, mainH - 1f)
+                    // v2.4.12：长按=按住屏幕滑动 → 1:1 轴比例跟手（背屏位移按比例映射主屏）。
+                    // 原 padSens=1.39 背屏滑满(~596px)仅拖 ~830px，不够翻一页（1000+px）
+                    // →"长按后滑动翻不了页"。光标移动（非拖动）仍用 padSens。
+                    val sx = mainW / view.width.toFloat().coerceAtLeast(1f)
+                    val sy = mainH / view.height.toFloat().coerceAtLeast(1f)
+                    dragX = (dragX + dx * sx).coerceIn(0f, mainW - 1f)
+                    dragY = (dragY + dy * sy).coerceIn(0f, mainH - 1f)
                     emitMove(dragX, dragY)
                     cx = dragX; cy = dragY
                 } else if (moved) {
@@ -424,33 +439,67 @@ class TouchMapper(
     private var gtLastX = 0f
     private var gtLastY = 0f
 
+    // v2.4.12：体感"长按=按住屏幕滑动翻页"（与触控板长按同一语义）
+    private var gyroHolding = false
+    private var holdX = 0f
+    private var holdY = 0f
+    private val gyroHoldRunnable = Runnable {
+        if (!gtMoved && !gyroHolding) {
+            gyroHolding = true
+            val p = gyroPos()
+            holdX = if (p.first >= 0f) p.first else mainW / 2f
+            holdY = if (p.second >= 0f) p.second else mainH / 2f
+            emitDown(holdX, holdY) // 按住主屏（光标当前位置）
+            onCursor(holdX, holdY, true)
+        }
+    }
+
     private fun gyroTouch(e: MotionEvent, view: View): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x
                 downY = e.y
                 gtMoved = false
+                gyroHolding = false
                 gtLastX = e.x
                 gtLastY = e.y
+                // v2.4.12：长按检测——按住背屏 ~0.4s 未移动 → 进入"按住屏幕滑动"状态
+                view.removeCallbacks(gyroHoldRunnable)
+                view.postDelayed(gyroHoldRunnable, 400)
             }
             MotionEvent.ACTION_MOVE -> {
-                if (hypot(e.x - downX, e.y - downY) > cfg.gThreshold * view.width) {
-                    gtMoved = true
-                }
-                if (gtMoved) {
-                    // 拖动=按触摸位移平移光标（位置经 onCursor 同步到服务级光标状态）
-                    val p = gyroPos()
-                    if (p.first >= 0f && p.second >= 0f) {
-                        val nx = (p.first + (e.x - gtLastX) * 1.6f).coerceIn(0f, mainW - 1f)
-                        val ny = (p.second + (e.y - gtLastY) * 1.6f).coerceIn(0f, mainH - 1f)
-                        onCursor(nx, ny, true)
+                if (gyroHolding) {
+                    // 长按已触发：手指位移 1:1 轴比例映射 = 按住主屏滑动（翻页/拖拽）
+                    val sx = mainW / view.width.toFloat().coerceAtLeast(1f)
+                    val sy = mainH / view.height.toFloat().coerceAtLeast(1f)
+                    holdX = (holdX + (e.x - gtLastX) * sx).coerceIn(0f, mainW - 1f)
+                    holdY = (holdY + (e.y - gtLastY) * sy).coerceIn(0f, mainH - 1f)
+                    emitMove(holdX, holdY)
+                    onCursor(holdX, holdY, true)
+                } else {
+                    if (hypot(e.x - downX, e.y - downY) > cfg.gThreshold * view.width) {
+                        gtMoved = true
+                        view.removeCallbacks(gyroHoldRunnable)
+                    }
+                    if (gtMoved) {
+                        // 拖动=按触摸位移平移光标（位置经 onCursor 同步到服务级光标状态）
+                        val p = gyroPos()
+                        if (p.first >= 0f && p.second >= 0f) {
+                            val nx = (p.first + (e.x - gtLastX) * 1.6f).coerceIn(0f, mainW - 1f)
+                            val ny = (p.second + (e.y - gtLastY) * 1.6f).coerceIn(0f, mainH - 1f)
+                            onCursor(nx, ny, true)
+                        }
                     }
                 }
                 gtLastX = e.x
                 gtLastY = e.y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (!gtMoved) {
+                view.removeCallbacks(gyroHoldRunnable)
+                if (gyroHolding) {
+                    gyroHolding = false
+                    emitUp(holdX, holdY) // 松手 → 抬起，结束按住滑动
+                } else if (!gtMoved) {
                     val p = gyroPos()
                     val px = if (p.first >= 0f) p.first else mainW / 2f
                     val py = if (p.second >= 0f) p.second else mainH / 2f
@@ -459,6 +508,15 @@ class TouchMapper(
             }
         }
         return true
+    }
+
+    /** v2.4.12：体感移动光标时，若处于"长按按住"状态 → 光标移动即主屏滑动（翻页） */
+    fun onGyroCursor(x: Float, y: Float) {
+        if (gyroHolding) {
+            holdX = x.coerceIn(0f, mainW - 1f)
+            holdY = y.coerceIn(0f, mainH - 1f)
+            emitMove(holdX, holdY)
+        }
     }
 
     private fun now() = SystemClock.uptimeMillis()
