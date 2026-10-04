@@ -139,6 +139,11 @@ public final class TouchBridge {
                 r.close();
             } catch (Exception ignored) {
             }
+            // v2.4.11：退出前收尾（与参考实现一致）——若还有进行中的触摸，
+            // 补发 CANCEL，防止系统里残留"按下未抬起"的悬空状态影响后续滑动
+            if (bridge.active) {
+                bridge.event(3, bridge.lastX, bridge.lastY);
+            }
         } catch (Throwable t) {
             w.println("MM_FATAL:" + t);
         }
