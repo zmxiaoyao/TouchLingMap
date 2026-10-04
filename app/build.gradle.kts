@@ -18,8 +18,8 @@ android {
         applicationId = "com.touchling.mapper"
         minSdk = 31
         targetSdk = 34
-        versionCode = 36
-        versionName = "2.4.11"
+        versionCode = 37
+        versionName = "2.4.12"
     }
 
     signingConfigs {
