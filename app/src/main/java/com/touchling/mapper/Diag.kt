@@ -14,6 +14,7 @@ object Diag {
     private const val TAG = "TouchLing"
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     @Volatile private var file: File? = null
+    private var sinceCheck = 0
 
     fun init(appContext: android.content.Context) {
         if (file != null) return
@@ -35,6 +36,14 @@ object Diag {
         val line = "[${fmt.format(Date())}] $msg"
         Log.d(TAG, line)
         val f = file ?: return
-        try { f.appendText(line + "\n") } catch (_: Throwable) {}
+        try {
+            f.appendText(line + "\n")
+            // v2.4.11：运行时轮转（此前只在 init 检查——长会话持续膨胀会拖慢每行 append）
+            if (++sinceCheck >= 2000 && f.length() > 500_000) {
+                sinceCheck = 0
+                File(f.parentFile, "diag.log.old").delete()
+                f.renameTo(File(f.parentFile, "diag.log.old"))
+            }
+        } catch (_: Throwable) {}
     }
 }
